@@ -1,0 +1,34 @@
+Arch Linux:
+This creates a postgres instance on your machine which is not optimal, but for a starting point it may be fine
+
+To run pygrametl1 with jython, first go to /datagenerator/datagenerator.py and change line 139 and 140 to open() instead of file()
+Second go to the pygrametl1.py file and change line 20-21 to use your system username instead of chr
+
+The afterwards run these commands:
+
+```
+python3 -m venv .venv
+
+source .venv/bin/activate 
+
+python3 ./datagenerator/datagenerator.py
+
+yay -S jython postgresql-jdbc postgresql
+
+sudo ln -s /opt/jython/bin/jython /usr/local/bin/jython
+hash -r
+
+sudo -u postgres initdb -D /var/lib/postgres/data
+
+sudo systemctl enable --now postgresql
+
+sudo /opt/jython/bin/pip-jython install "pygrametl==2.6"
+
+sudo -u postgres createuser YOURUSERNAME
+sudo -u postgres createdb -O YOURUSERNAME YOURUSERNAME
+
+psql -f starschema.sql
+
+jython -J-cp /usr/share/java/postgresql-jdbc/postgresql.jar pygrametl1.py
+```
+This take on my pc 40 min total including setup to run. If a faster version is preferred, change the variables in /datagenerator/datagenerator.py
