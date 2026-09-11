@@ -1,18 +1,15 @@
 import datetime
-import sys
 import time
+import psycopg2
+import pygrametl
 
-sys.path.append('/home/chr/code') # where pygrametl is installed
-
+from pygrametl import ConnectionWrapper
 from pygrametl.datasources import CSVSource, MergeJoiningSource
 from pygrametl.tables import CachedDimension, SnowflakedDimension,\
     SlowlyChangingDimension, BulkFactTable
 
-import psycopg2
-import pygrametl
-
 pgconn = psycopg2.connect(host="localhost", dbname="bech", user="bech")
-connection = pygrametl.ConnectionWrapper(pgconn)
+connection = ConnectionWrapper(pgconn)
 connection.setasdefault()
 connection.execute('set search_path to pygrametlexa')
 
