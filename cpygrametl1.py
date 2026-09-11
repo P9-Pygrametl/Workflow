@@ -2,13 +2,16 @@ import datetime
 import time
 import psycopg2
 import pygrametl
+import os
+from dotenv import load_dotenv, dotenv_values 
+load_dotenv() 
 
 from pygrametl import ConnectionWrapper
 from pygrametl.datasources import CSVSource, MergeJoiningSource
 from pygrametl.tables import CachedDimension, SnowflakedDimension,\
     SlowlyChangingDimension, BulkFactTable
 
-pgconn = psycopg2.connect(host="localhost", dbname="bech", user="bech")
+pgconn = psycopg2.connect(host="localhost", dbname=os.getenv("USERNAME"), user=os.getenv("USERNAME"))
 connection = ConnectionWrapper(pgconn)
 connection.setasdefault()
 connection.execute('set search_path to pygrametlexa')

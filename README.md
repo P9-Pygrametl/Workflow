@@ -33,7 +33,7 @@ jython -J-cp /usr/share/java/postgresql-jdbc/postgresql.jar pygrametl1.py
 
 CPython:
 
-Change to system username in cpygreametl1.py line 11
+Setup .env with your system username
 Arch:
 ```
 python3 -m venv .venv
@@ -50,7 +50,7 @@ sudo systemctl enable --now postgresql
 sudo -u postgres createuser YOURUSERNAME
 sudo -u postgres createdb -O YOURUSERNAME YOURUSERNAME
 
-pip install pygrametl psycopg2
+pip install pygrametl psycopg2 python-dotenv
 
 psql -f starschema.sql
 
