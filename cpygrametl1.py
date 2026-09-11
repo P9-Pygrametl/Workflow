@@ -1,6 +1,7 @@
 import datetime
 import sys
 import time
+from pathlib import Path
 
 sys.path.append('/home/chr/code') # where pygrametl is installed
 
@@ -11,7 +12,9 @@ from pygrametl.tables import CachedDimension, SnowflakedDimension,\
 import psycopg2
 import pygrametl
 
-pgconn = psycopg2.connect(host="localhost", dbname="bech", user="bech")
+from benchmark_utils import write_benchmark_csv
+
+pgconn = psycopg2.connect(host="localhost", dbname="fiske", user="fiske")
 connection = pygrametl.ConnectionWrapper(pgconn)
 connection.setasdefault()
 connection.execute('set search_path to pygrametlexa')
@@ -21,6 +24,7 @@ def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filehandle):
     cursor = pgconn.cursor()
     cursor.copy_from(file=filehandle, table=name, sep=fieldsep,
                      null=str(nullval), columns=atts)
+
 
 def datehandling(row, namemapping):
     # This method is called from ensure(row) when the lookup of a date fails.
@@ -38,7 +42,7 @@ def datehandling(row, namemapping):
     row['weekyear'] = isoyear
     row['dateid'] = dayinyear + 366 * (year - 1990) #Allow dates from 1990-01-01
     return row
-    
+
 
 def extractdomaininfo(row):
     # Take the 'www.domain.org' part from 'http://www.domain.org/page.html'
@@ -103,20 +107,57 @@ testresults = CSVSource(open('TestResults.csv', 'r', 16384),
 inputdata = MergeJoiningSource(downloadlog, 'localfile', testresults,
                                'localfile')
 
+
 def main():
-    print (time.asctime())
+    total_start = time.perf_counter()
+    rows_processed = 0
+    row_transform_elapsed = 0.0
+    lookup_elapsed = 0.0
+    fact_insert_elapsed = 0.0
+    commit_elapsed = 0.0
+
+    print(time.asctime())
     for row in inputdata:
+        stage_start = time.perf_counter()
         extractdomaininfo(row)
         extractserverinfo(row)
-        row['size'] = pygrametl.getint(row['size']) # Convert to an int
-        # Add the data to the dimension tables and the fact table
+        row['size'] = pygrametl.getint(row['size'])
+        row_transform_elapsed += time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
         row['pageid'] = pagedim.scdensure(row)
-        row['dateid'] = datedim.ensure(row, {'date':'downloaddate'})
-        row['testid'] = testdim.lookup(row, {'testname':'test'})
+        row['dateid'] = datedim.ensure(row, {'date': 'downloaddate'})
+        row['testid'] = testdim.lookup(row, {'testname': 'test'})
+        lookup_elapsed += time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
         facttbl.insert(row)
+        fact_insert_elapsed += time.perf_counter() - stage_start
+
+        rows_processed += 1
+
+    stage_start = time.perf_counter()
     connection.commit()
     connection.close()
-    print (time.asctime())
+    commit_elapsed += time.perf_counter() - stage_start
+
+    elapsed_total = time.perf_counter() - total_start
+    benchmark_path = write_benchmark_csv(
+        script_name='cpygrametl1',
+        runtime='python3',
+        timings=[
+            ('row_transform', row_transform_elapsed),
+            ('dimension_lookup', lookup_elapsed),
+            ('fact_insert', fact_insert_elapsed),
+            ('commit_and_close', commit_elapsed),
+            ('total', elapsed_total),
+        ],
+        rows_processed=rows_processed,
+    )
+
+    print(f"Benchmark CSV: {benchmark_path}")
+    print(time.asctime())
+
 
 if __name__ == '__main__':
     main()

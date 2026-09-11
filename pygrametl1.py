@@ -14,11 +14,13 @@ from pygrametl.datasources import CSVSource, MergeJoiningSource
 from pygrametl.tables import CachedDimension, SnowflakedDimension,\
     SlowlyChangingDimension, BulkFactTable
 
+from benchmark_utils import write_benchmark_csv
+
 
 # Connection to target DW:
 java.lang.Class.forName("org.postgresql.Driver")
 pgconn = java.sql.DriverManager.getConnection \
-         ("jdbc:postgresql://localhost/bech?user=bech")
+         ("jdbc:postgresql://localhost/fiske?user=fiske")
 pgconn.setAutoCommit(False)
 connection = BackgroundJDBCConnectionWrapper(pgconn)
 connection.setasdefault()
@@ -32,6 +34,7 @@ def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filehandle):
     sql = "COPY %s(%s) FROM STDIN WITH DELIMITER '%s'" % \
           (name, ', '.join(atts), fieldsep)
     copymgr.copyIn(sql, filehandle)
+
 
 def datehandling(row, namemapping):
     # This method is called from ensure(row) when the lookup of a date fails.
@@ -49,7 +52,7 @@ def datehandling(row, namemapping):
     row['weekyear'] = isoyear
     row['dateid'] = dayinyear + 366 * (year - 1990) #Allow dates from 1990-01-01
     return row
-    
+
 
 def extractdomaininfo(row):
     # Take the 'www.domain.org' part from 'http://www.domain.org/page.html'
@@ -114,18 +117,57 @@ testresults = CSVSource(file('TestResults.csv', 'r', 16384),
 inputdata = MergeJoiningSource(downloadlog, 'localfile', testresults,
                                'localfile')
 
+
 def main():
+    total_start = time.perf_counter()
+    rows_processed = 0
+    row_transform_elapsed = 0.0
+    lookup_elapsed = 0.0
+    fact_insert_elapsed = 0.0
+    commit_elapsed = 0.0
+
+    print(time.asctime())
     for row in inputdata:
+        stage_start = time.perf_counter()
         extractdomaininfo(row)
         extractserverinfo(row)
-        row['size'] = pygrametl.getint(row['size']) # Convert to an int
-        # Add the data to the dimension tables and the fact table
+        row['size'] = pygrametl.getint(row['size'])
+        row_transform_elapsed += time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
         row['pageid'] = pagedim.scdensure(row)
-        row['dateid'] = datedim.ensure(row, {'date':'downloaddate'})
-        row['testid'] = testdim.lookup(row, {'testname':'test'})
+        row['dateid'] = datedim.ensure(row, {'date': 'downloaddate'})
+        row['testid'] = testdim.lookup(row, {'testname': 'test'})
+        lookup_elapsed += time.perf_counter() - stage_start
+
+        stage_start = time.perf_counter()
         facttbl.insert(row)
+        fact_insert_elapsed += time.perf_counter() - stage_start
+
+        rows_processed += 1
+
+    stage_start = time.perf_counter()
     connection.commit()
     connection.close()
+    commit_elapsed += time.perf_counter() - stage_start
+
+    elapsed_total = time.perf_counter() - total_start
+    benchmark_path = write_benchmark_csv(
+        script_name='pygrametl1',
+        runtime='java',
+        timings=[
+            ('row_transform', row_transform_elapsed),
+            ('dimension_lookup', lookup_elapsed),
+            ('fact_insert', fact_insert_elapsed),
+            ('commit_and_close', commit_elapsed),
+            ('total', elapsed_total),
+        ],
+        rows_processed=rows_processed,
+    )
+
+    print(f"Benchmark CSV: {benchmark_path}")
+    print(time.asctime())
+
 
 if __name__ == '__main__':
     main()
