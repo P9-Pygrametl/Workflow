@@ -1,4 +1,6 @@
 import csv
+import os
+import sys
 import time
 from pathlib import Path
 
@@ -7,12 +9,20 @@ def write_benchmark_csv(script_name, runtime, timings, rows_processed):
     """Write a benchmark summary CSV under Workflow/benchmarks/<runtime>/."""
     root = Path(__file__).resolve().parent
     out_dir = root / "benchmarks" / runtime
-    out_dir.mkdir(parents=True, exist_ok=True)
+    if not out_dir.exists():
+        os.makedirs(str(out_dir))
 
     timestamp = time.strftime("%Y-%m-%d_%H%M%S")
-    out_file = out_dir / f"{script_name}_{timestamp}.csv"
+    out_file = out_dir / "{script_name}_{timestamp}.csv".format(
+        script_name=script_name, timestamp=timestamp
+    )
 
-    with out_file.open("w", newline="") as csvfile:
+    if sys.version_info[0] < 3:
+        csvfile = out_file.open("wb")
+    else:
+        csvfile = out_file.open("w", newline="")
+
+    with csvfile:
         writer = csv.DictWriter(
             csvfile, fieldnames=["runtime", "phase", "seconds", "rows"]
         )

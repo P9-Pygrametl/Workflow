@@ -20,7 +20,7 @@ from benchmark_utils import write_benchmark_csv
 # Connection to target DW:
 java.lang.Class.forName("org.postgresql.Driver")
 pgconn = java.sql.DriverManager.getConnection \
-         ("jdbc:postgresql://localhost/fiske?user=fiske")
+         ("jdbc:postgresql://localhost/bech?user=bech")
 pgconn.setAutoCommit(False)
 connection = BackgroundJDBCConnectionWrapper(pgconn)
 connection.setasdefault()
@@ -66,6 +66,10 @@ def extractdomaininfo(row):
 def extractserverinfo(row):
     # Find the server name from a string like "ServerName/Version"
     row['server'] = row['serverversion'].split('/')[0]
+
+
+# Python 2/Jython do not provide time.perf_counter.
+perf_counter = getattr(time, 'perf_counter', time.time)
 
 
 # Dimension and fact table objects
@@ -119,7 +123,7 @@ inputdata = MergeJoiningSource(downloadlog, 'localfile', testresults,
 
 
 def main():
-    total_start = time.perf_counter()
+    total_start = perf_counter()
     rows_processed = 0
     row_transform_elapsed = 0.0
     lookup_elapsed = 0.0
@@ -128,30 +132,30 @@ def main():
 
     print(time.asctime())
     for row in inputdata:
-        stage_start = time.perf_counter()
+        stage_start = perf_counter()
         extractdomaininfo(row)
         extractserverinfo(row)
         row['size'] = pygrametl.getint(row['size'])
-        row_transform_elapsed += time.perf_counter() - stage_start
+        row_transform_elapsed += perf_counter() - stage_start
 
-        stage_start = time.perf_counter()
+        stage_start = perf_counter()
         row['pageid'] = pagedim.scdensure(row)
         row['dateid'] = datedim.ensure(row, {'date': 'downloaddate'})
         row['testid'] = testdim.lookup(row, {'testname': 'test'})
-        lookup_elapsed += time.perf_counter() - stage_start
+        lookup_elapsed += perf_counter() - stage_start
 
-        stage_start = time.perf_counter()
+        stage_start = perf_counter()
         facttbl.insert(row)
-        fact_insert_elapsed += time.perf_counter() - stage_start
+        fact_insert_elapsed += perf_counter() - stage_start
 
         rows_processed += 1
 
-    stage_start = time.perf_counter()
+    stage_start = perf_counter()
     connection.commit()
     connection.close()
-    commit_elapsed += time.perf_counter() - stage_start
+    commit_elapsed += perf_counter() - stage_start
 
-    elapsed_total = time.perf_counter() - total_start
+    elapsed_total = perf_counter() - total_start
     benchmark_path = write_benchmark_csv(
         script_name='pygrametl1',
         runtime='java',
@@ -165,7 +169,7 @@ def main():
         rows_processed=rows_processed,
     )
 
-    print(f"Benchmark CSV: {benchmark_path}")
+    print("Benchmark CSV: {}".format(benchmark_path))
     print(time.asctime())
 
 

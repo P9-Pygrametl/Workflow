@@ -14,7 +14,7 @@ import pygrametl
 
 from benchmark_utils import write_benchmark_csv
 
-pgconn = psycopg2.connect(host="localhost", dbname="fiske", user="fiske")
+pgconn = psycopg2.connect(host="localhost", dbname="bech", user="bech")
 connection = pygrametl.ConnectionWrapper(pgconn)
 connection.setasdefault()
 connection.execute('set search_path to pygrametlexa')
