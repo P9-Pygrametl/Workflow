@@ -29,3 +29,49 @@ psql -f starschema.sql
 
 jython -J-cp /usr/share/java/postgresql-jdbc/postgresql.jar pygrametl1.py
 ```
+
+
+CPython:
+
+Setup .env with your system username
+Arch:
+```
+python3 -m venv .venv
+source .venv/bin/activate 
+
+python3 ./datagenerator/datagenerator.py
+
+yay -S postgresql
+
+sudo -u postgres initdb -D /var/lib/postgres/data
+
+sudo systemctl enable --now postgresql
+
+sudo -u postgres createuser YOURUSERNAME
+sudo -u postgres createdb -O YOURUSERNAME YOURUSERNAME
+
+pip install pygrametl psycopg2 python-dotenv
+
+psql -f starschema.sql
+
+python3 cpygrametl1.py
+```
+
+MacOS:
+```
+python3 -m venv .venv
+source .venv/bin/activate
+
+python3 ./datagenerator/datagenerator.py
+
+brew install postgresql
+brew services start postgresql
+
+createdb "$(whoami)"
+
+pip install pygrametl psycopg2 python-dotenv
+
+psql -f starschema.sql
+
+python3 cpygrametl1.py
+```
