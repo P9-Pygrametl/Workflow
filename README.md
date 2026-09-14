@@ -50,11 +50,11 @@ sudo systemctl enable --now postgresql
 sudo -u postgres createuser YOURUSERNAME
 sudo -u postgres createdb -O YOURUSERNAME YOURUSERNAME
 
-pip install pygrametl psycopg2 python-dotenv
+pip install pygrametl psycopg2 psycopg python-dotenv
 
 psql -f starschema.sql
 
-python3 cpygrametl1.py
+python3 cpygrametl1.py //or python3 cpygrametl1spy3.py
 ```
 
 MacOS:
@@ -69,9 +69,9 @@ brew services start postgresql
 
 createdb "$(whoami)"
 
-pip install pygrametl psycopg2 python-dotenv
+pip install pygrametl psycopg2 psycopg python-dotenv
 
 psql -f starschema.sql
 
-python3 cpygrametl1.py
+python3 cpygrametl1.py //or python3 cpygrametl1spy3.py
 ```
