@@ -11,7 +11,9 @@ from pygrametl.datasources import CSVSource, MergeJoiningSource
 from pygrametl.tables import CachedDimension, SnowflakedDimension,\
     SlowlyChangingDimension, BulkFactTable
 
-pgconn = psycopg2.connect(host="localhost", dbname=os.getenv("USERNAME"), user=os.getenv("USERNAME"))
+from phase_helper import Phase
+
+pgconn = psycopg2.connect(host="localhost", dbname="niklasbohedehus", user="niklasbohedehus")
 connection = ConnectionWrapper(pgconn)
 connection.setasdefault()
 connection.execute('set search_path to pygrametlexa')
@@ -105,17 +107,28 @@ inputdata = MergeJoiningSource(downloadlog, 'localfile', testresults,
 
 def main():
     print (time.asctime())
-    for row in inputdata:
-        extractdomaininfo(row)
-        extractserverinfo(row)
-        row['size'] = pygrametl.getint(row['size']) # Convert to an int
-        # Add the data to the dimension tables and the fact table
-        row['pageid'] = pagedim.scdensure(row)
-        row['dateid'] = datedim.ensure(row, {'date':'downloaddate'})
-        row['testid'] = testdim.lookup(row, {'testname':'test'})
-        facttbl.insert(row)
-    connection.commit()
-    connection.close()
+    with Phase("total") as total:
+        rows_processed = 0
+
+        with Phase("process_rows") as proc:
+            for row in inputdata:
+                extractdomaininfo(row)
+                extractserverinfo(row)
+                row['size'] = pygrametl.getint(row['size']) # Convert to an int
+                # Add the data to the dimension tables and the fact table
+                row['pageid'] = pagedim.scdensure(row)
+                row['dateid'] = datedim.ensure(row, {'date':'downloaddate'})
+                row['testid'] = testdim.lookup(row, {'testname':'test'})
+                facttbl.insert(row)
+                rows_processed += 1
+            proc.rows = rows_processed
+
+        with Phase("commit_and_close") as cc:
+            connection.commit()
+            connection.close()
+            cc.rows = rows_processed
+
+        total.rows = rows_processed
     print (time.asctime())
 
 if __name__ == '__main__':
