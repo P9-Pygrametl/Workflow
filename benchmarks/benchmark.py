@@ -1,9 +1,8 @@
 import argparse
-import csv
 import json
 import sqlite3
 import os
-import psutil
+import resource
 import statistics
 import subprocess
 import sys
@@ -349,12 +348,12 @@ def reset_warehouse():
     )
 
 
-def process_cpu_time(process):
-    try:
-        times = process.cpu_times()
-        return times.user + times.system
-    except psutil.NoSuchProcess:
-        return 0.0
+def child_cpu_time():
+    usage = resource.getrusage(
+        resource.RUSAGE_CHILDREN
+    )
+
+    return usage.ru_utime + usage.ru_stime
 
 
 def implementation_order(run_number):
@@ -379,29 +378,18 @@ def run_clean_benchmark(name, script, rtt_ms):
     print(f"  Resetting warehouse for {name}...")
     reset_warehouse()
 
+    cpu_start = child_cpu_time()
     wall_start = time.perf_counter()
 
-    child = subprocess.Popen(
-        [sys.executable, str(ROOT / script)],
+    subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / script),
+        ],
+        check=True,
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
     )
-
-    proc = psutil.Process(child.pid)
-    cpu_time = 0.0
-
-    while child.poll() is None:
-        cpu_time = process_cpu_time(proc) or cpu_time
-        time.sleep(0.1)
-
-    # Final read may fail if the process is already gone;
-    # keep the last successful sample in that case.
-    cpu_time = process_cpu_time(proc) or cpu_time
-
-    if child.returncode != 0:
-        raise subprocess.CalledProcessError(
-            child.returncode, child.args
-        )
 
     wall_end = time.perf_counter()
     cpu_end = child_cpu_time()
@@ -423,7 +411,7 @@ def run_clean_benchmark(name, script, rtt_ms):
     return {
         "implementation": name,
         "source_rtt_ms": rtt_ms,
-        "clean_wall_seconds": wall_end - wall_start,
+        "clean_wall_seconds": wall_time,
         "python_cpu_seconds": cpu_time,
         "waiting_seconds": waiting_time,
         "cpu_percent": cpu_percent,
