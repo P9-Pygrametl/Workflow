@@ -31,6 +31,6 @@ services:
     volumes:
       - ./data/:/data
     environment:
-      - SQLITE_DATABASE=bench_results.db
+      - SQLITE_DATABASE=benchmark_results.db
 volumes:
   source_pgdata:
