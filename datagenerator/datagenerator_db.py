@@ -1,11 +1,13 @@
 import os
+import random
+from itertools import islice
 
 import psycopg2
 from dotenv import load_dotenv
-import random
-import datagenerator
-from itertools import islice
 from psycopg2.extras import execute_values
+
+import datagenerator
+
 
 load_dotenv()
 
@@ -33,6 +35,7 @@ def create_source_tables(connection):
         """)
 
     connection.commit()
+
 
 def generate_download_rows():
     servers = ["SomeServer/1.0", "SomeServer/2.0", "SuperServer/3.0"]
@@ -99,6 +102,7 @@ def generate_download_rows():
 
             yield tuple(line)
 
+
 def insert_download_rows(connection, rows):
     with connection.cursor() as cursor:
         cursor.executemany(
@@ -118,6 +122,7 @@ def insert_download_rows(connection, rows):
 
     connection.commit()
 
+
 def generate_test_rows(download_rows):
     for download_row in download_rows:
         localfile = download_row[0]
@@ -131,6 +136,7 @@ def generate_test_rows(download_rows):
             errors = (test_number * size) % day
 
             yield (localfile, test, errors)
+
 
 def insert_test_rows(connection, rows, batch_size=10000):
     with connection.cursor() as cursor:
@@ -155,18 +161,31 @@ def insert_test_rows(connection, rows, batch_size=10000):
 
     connection.commit()
 
+
 def clear_source_tables(connection):
     with connection.cursor() as cursor:
         cursor.execute("TRUNCATE TABLE testresults, downloadlog")
 
     connection.commit()
 
+
 def main():
     username = os.getenv("USERNAME")
+    source_database = os.getenv("SOURCE_DATABASE", "pygrametl_source")
+    source_host = os.getenv("SOURCE_HOST", "localhost")
+    source_port_value = os.getenv("SOURCE_PORT", "5432")
+
+    try:
+        source_port = int(source_port_value)
+    except ValueError:
+        raise ValueError(
+            f"SOURCE_PORT must be an integer, got {source_port_value!r}"
+        )
 
     connection = psycopg2.connect(
-        host="localhost",
-        database="pygrametl_source",
+        host=source_host,
+        port=source_port,
+        dbname=source_database,
         user=username,
     )
 

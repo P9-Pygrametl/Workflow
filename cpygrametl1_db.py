@@ -20,6 +20,15 @@ load_dotenv()
 username = os.getenv("USERNAME")
 source_database = os.getenv("SOURCE_DATABASE")
 dw_database = os.getenv("DW_DATABASE")
+source_host = os.getenv("SOURCE_HOST", "localhost")
+source_port_value = os.getenv("SOURCE_PORT", "5432")
+
+try:
+    source_port = int(source_port_value)
+except ValueError:
+    raise ValueError(
+        f"SOURCE_PORT must be an integer, got {source_port_value!r}"
+    )
 
 
 # Connection to target DW
@@ -36,13 +45,15 @@ connection.execute("SET search_path TO pygrametlexa")
 
 # Connections to source database
 sourceconn1 = psycopg2.connect(
-    host="localhost",
+    host=source_host,
+    port=source_port,
     dbname=source_database,
     user=username,
 )
 
 sourceconn2 = psycopg2.connect(
-    host="localhost",
+    host=source_host,
+    port=source_port,
     dbname=source_database,
     user=username,
 )
