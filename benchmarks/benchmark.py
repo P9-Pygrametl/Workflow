@@ -192,7 +192,7 @@ def save_results(results):
     placeholders = ", ".join("?" for _ in columns)
 
     with sqlite3.connect(RESULTS_DB) as conn:
-        conn.execute(f"CREATE TABLE IF NOT EXISTS results ({column_defs})")
+        conn.execute(f"CREATE TABLE IF NOT EXISTS results ({column_defs}) STRICT")
         conn.executemany(
             f"INSERT INTO results ({', '.join(column_names)}) "
             f"VALUES ({placeholders})",
