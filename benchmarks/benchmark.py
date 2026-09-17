@@ -1,7 +1,7 @@
-import csv
 import json
+import sqlite3
 import os
-import resource
+import psutil
 import statistics
 import subprocess
 import sys
@@ -37,7 +37,7 @@ PHASES = [
 
 REPEATS = 1
 
-RESULTS_FILE = ROOT / "benchmarks" / "benchmark_results.csv"
+RESULTS_DB = ROOT / "benchmarks" / "benchmark_results.db"
 PROFILE_SCRIPT = ROOT / "benchmarks" / "profile_etl.py"
 
 
@@ -55,12 +55,12 @@ def reset_warehouse():
     )
 
 
-def child_cpu_time():
-    usage = resource.getrusage(
-        resource.RUSAGE_CHILDREN
-    )
-
-    return usage.ru_utime + usage.ru_stime
+def process_cpu_time(process):
+    try:
+        times = process.cpu_times()
+        return times.user + times.system
+    except psutil.NoSuchProcess:
+        return 0.0
 
 
 def implementation_order(run_number):
@@ -80,28 +80,35 @@ def run_clean_benchmark(name, script):
     print(f"  Resetting warehouse for {name}...")
     reset_warehouse()
 
-    cpu_start = child_cpu_time()
     wall_start = time.perf_counter()
 
-    subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / script),
-        ],
-        check=True,
+    child = subprocess.Popen(
+        [sys.executable, str(ROOT / script)],
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
     )
 
-    wall_end = time.perf_counter()
-    cpu_end = child_cpu_time()
+    proc = psutil.Process(child.pid)
+    cpu_time = 0.0
 
-    wall_time = wall_end - wall_start
-    cpu_time = cpu_end - cpu_start
+    while child.poll() is None:
+        cpu_time = process_cpu_time(proc) or cpu_time
+        time.sleep(0.1)
+
+    # Final read may fail if the process is already gone;
+    # keep the last successful sample in that case.
+    cpu_time = process_cpu_time(proc) or cpu_time
+
+    if child.returncode != 0:
+        raise subprocess.CalledProcessError(
+            child.returncode, child.args
+        )
+
+    wall_end = time.perf_counter()
 
     return {
         "implementation": name,
-        "clean_wall_seconds": wall_time,
+        "clean_wall_seconds": wall_end - wall_start,
         "python_cpu_seconds": cpu_time,
     }
 
@@ -173,41 +180,42 @@ def add_profile_data(result, profile):
 
 
 def save_results(results):
-    fieldnames = [
-        "implementation",
-        "run",
-        "clean_wall_seconds",
-        "python_cpu_seconds",
-        "profiled_wall_seconds",
-        "rows",
+    columns = [
+        ("implementation", "TEXT"),
+        ("run", "INTEGER"),
+        ("clean_wall_seconds", "REAL"),
+        ("python_cpu_seconds", "REAL"),
+        ("profiled_wall_seconds", "REAL"),
+        ("rows", "INTEGER"),
+        ("timestamp", "TEXT"),
     ]
 
     for phase in PHASES:
-        fieldnames.extend(
+        columns.append((f"profile_{phase}_seconds", "REAL"))
+        columns.append((f"profile_{phase}_percent", "REAL"))
+
+    column_names = [name for name, _ in columns]
+    column_defs = ", ".join(f"{name} {type_}" for name, type_ in columns)
+    placeholders = ", ".join("?" for _ in columns)
+
+    with sqlite3.connect(RESULTS_DB) as conn:
+        conn.execute(f"CREATE TABLE IF NOT EXISTS results ({column_defs})")
+        conn.executemany(
+            f"INSERT INTO results ({', '.join(column_names)}) "
+            f"VALUES ({placeholders})",
             [
-                f"profile_{phase}_seconds",
-                f"profile_{phase}_percent",
-            ]
+                tuple(result.get(name) for name in column_names)
+                for result in results
+            ],
         )
 
-    with open(
-        RESULTS_FILE,
-        "w",
-        newline="",
-    ) as outfile:
-        writer = csv.DictWriter(
-            outfile,
-            fieldnames=fieldnames,
-        )
-
-        writer.writeheader()
-        writer.writerows(results)
+    conn.close()
 
 
 def print_summary(results):
     print("\nBenchmark summary")
     print("-" * 60)
-
+    
     for name in IMPLEMENTATIONS:
         matching = [
             result
@@ -282,6 +290,8 @@ def main():
 
             result["run"] = run_number
 
+            result["timestamp"] = time.asctime()
+
             results_by_key[
                 (run_number, name)
             ] = result
@@ -346,7 +356,7 @@ def main():
 
     print(
         f"\nResults written to: "
-        f"{RESULTS_FILE}"
+        f"{RESULTS_DB.resolve()}"
     )
 
 
