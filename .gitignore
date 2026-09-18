@@ -5,5 +5,7 @@ __pycache__/
 *.py[cod]
 DownloadLog.csv
 TestResults.csv
+settings.json
 datagenerator/params.py
 benchmarks/benchmark_results.csv
+benchmarks/benchmark_results.db
