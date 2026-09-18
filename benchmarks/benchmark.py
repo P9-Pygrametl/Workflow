@@ -410,7 +410,7 @@ def save_results(results):
     columns = [
         ("implementation", "TEXT"),
         ("run", "INTEGER"),
-        ("source_rtt_ms", "REAL),
+        ("source_rtt_ms", "REAL"),
         ("clean_wall_seconds", "REAL"),
         ("python_cpu_seconds", "REAL"),
         ("profiled_wall_seconds", "REAL"),
