@@ -23,24 +23,6 @@ DW_DATABASE = os.getenv("DW_DATABASE")
 TOXIPROXY_API = os.getenv("TOXIPROXY_API")
 TOXIPROXY_PROXY = os.getenv("TOXIPROXY_PROXY")
 
-SOURCE_RTT_RAW = os.getenv("SOURCE_RTT_MS")
-
-if SOURCE_RTT_RAW is None:
-    SOURCE_RTT_MS = None
-else:
-    try:
-        SOURCE_RTT_MS = int(SOURCE_RTT_RAW)
-    except ValueError as error:
-        raise ValueError(
-            "SOURCE_RTT_MS must be an integer"
-        ) from error
-
-    if SOURCE_RTT_MS < 0:
-        raise ValueError(
-            "SOURCE_RTT_MS cannot be negative"
-        )
-
-
 ALL_IMPLEMENTATIONS = {
     "csv": "cpygrametl1.py",
     "database": "cpygrametl1_db.py",
@@ -107,6 +89,7 @@ if REPEATS < 1:
     )
 
 DEFAULT_PAGE_SIZES = [100]
+DEFAULT_SOURCE_RTT_MS = [0]
 
 RESULTS_FILE = ROOT / "benchmarks" / "benchmark_results.csv"
 PROFILE_SCRIPT = ROOT / "benchmarks" / "profile_etl.py"
@@ -232,32 +215,34 @@ def configure_toxiproxy(rtt_ms):
     )
 
 
-def prepare_implementation(implementation):
+def prepare_implementation(implementation, rtt_ms):
     if implementation != "database":
         return
 
-    if SOURCE_RTT_MS is None:
+    if rtt_ms == 0:
+        if TOXIPROXY_API and TOXIPROXY_PROXY:
+            configure_toxiproxy(0)
         return
 
     if not TOXIPROXY_API:
         raise RuntimeError(
-            "SOURCE_RTT_MS was specified, but "
+            "A non-zero latency was specified, but "
             "TOXIPROXY_API is not configured"
         )
 
     if not TOXIPROXY_PROXY:
         raise RuntimeError(
-            "SOURCE_RTT_MS was specified, but "
+            "A non-zero latency was specified, but "
             "TOXIPROXY_PROXY is not configured"
         )
 
     print(
         f"  Configuring Toxiproxy for "
-        f"{SOURCE_RTT_MS} ms RTT..."
+        f"{rtt_ms} ms RTT..."
     )
 
     configure_toxiproxy(
-        SOURCE_RTT_MS
+        rtt_ms
     )
 
 
@@ -281,6 +266,18 @@ def parse_args():
         ),
     )
 
+    parser.add_argument(
+        "--source-rtt-latency",
+        nargs="+",
+        dest="source_rtt_latency",
+        type=int,
+        default=DEFAULT_SOURCE_RTT_MS,
+        help=(
+            "Simulated source round-trip times in milliseconds. "
+            "Example: --source-rtt-latency 0 50 100"
+        ),
+    )
+
     return parser.parse_args()
 
 
@@ -290,6 +287,20 @@ def validate_sizes(sizes):
     if invalid_sizes:
         raise ValueError(
             f"All sizes must be positive integers, got {invalid_sizes!r}"
+        )
+
+
+def validate_latency(latencies):
+    invalid_latencies = [
+        latency
+        for latency in latencies
+        if latency < 0
+    ]
+
+    if invalid_latencies:
+        raise ValueError(
+            "Latency values must be non-negative integers, "
+            f"got {invalid_latencies!r}"
         )
 
 
@@ -361,8 +372,8 @@ def implementation_order(run_number):
     return implementations
 
 
-def run_clean_benchmark(name, script):
-    prepare_implementation(name)
+def run_clean_benchmark(name, script, rtt_ms):
+    prepare_implementation(name, rtt_ms)
 
     print(f"  Resetting warehouse for {name}...")
     reset_warehouse()
@@ -399,11 +410,7 @@ def run_clean_benchmark(name, script):
 
     return {
         "implementation": name,
-        "source_rtt_ms": (
-            SOURCE_RTT_MS
-            if name == "database"
-            else None
-        ),
+        "source_rtt_ms": rtt_ms,
         "clean_wall_seconds": wall_time,
         "python_cpu_seconds": cpu_time,
         "waiting_seconds": waiting_time,
@@ -411,9 +418,10 @@ def run_clean_benchmark(name, script):
     }
 
 
-def run_profile(implementation):
+def run_profile(implementation, rtt_ms):
     prepare_implementation(
-        implementation
+        implementation,
+        rtt_ms,
     )
 
     completed = subprocess.run(
@@ -556,104 +564,105 @@ def print_summary(results):
     )
 
     for pages in workload_sizes:
-        print(f"\nWorkload: pages={pages}")
-
-        for name in IMPLEMENTATIONS:
-            matching = [
-                result
+        latencies = sorted(
+            {
+                result["source_rtt_ms"]
                 for result in results
                 if result["workload_pages"] == pages
-                and result["implementation"] == name
-            ]
+            }
+        )
 
-            wall_times = [
-                result["clean_wall_seconds"]
-                for result in matching
-            ]
-
-            cpu_times = [
-                result["python_cpu_seconds"]
-                for result in matching
-            ]
-
-            waiting_times = [
-                result["waiting_seconds"]
-                for result in matching
-            ]
-
-            cpu_percentages = [
-                result["cpu_percent"]
-                for result in matching
-            ]
-
+        for source_rtt_ms in latencies:
             print(
-                f"{name:10} "
-                f"median wall="
-                f"{statistics.median(wall_times):.2f}s | "
-                f"median Python CPU="
-                f"{statistics.median(cpu_times):.2f}s | "
-                f"median waiting="
-                f"{statistics.median(waiting_times):.2f}s"
+                f"\nWorkload: pages={pages}, "
+                f"RTT={source_rtt_ms} ms"
             )
 
-            print(
-                f"{'':10} "
-                f"median CPU utilisation="
-                f"{statistics.median(cpu_percentages):.2f}%"
-            )
+            for name in IMPLEMENTATIONS:
+                matching = [
+                    result
+                    for result in results
+                    if result["workload_pages"] == pages
+                    and result["source_rtt_ms"] == source_rtt_ms
+                    and result["implementation"] == name
+                ]
 
-            if (
-                name == "database"
-                and SOURCE_RTT_MS is not None
-            ):
+                wall_times = [
+                    result["clean_wall_seconds"]
+                    for result in matching
+                ]
+
+                cpu_times = [
+                    result["python_cpu_seconds"]
+                    for result in matching
+                ]
+
+                waiting_times = [
+                    result["waiting_seconds"]
+                    for result in matching
+                ]
+
+                cpu_percentages = [
+                    result["cpu_percent"]
+                    for result in matching
+                ]
+
                 print(
-                    f"  Source RTT: "
-                    f"{SOURCE_RTT_MS} ms"
-                )
-
-            print(
-                "  Median phase wall / CPU / waiting:"
-            )
-
-            for phase in PHASES:
-                percentages = [
-                    result[
-                        f"profile_{phase}_percent"
-                    ]
-                    for result in matching
-                ]
-
-                cpu_seconds = [
-                    result[
-                        f"profile_{phase}_cpu_seconds"
-                    ]
-                    for result in matching
-                ]
-
-                waiting_seconds = [
-                    result[
-                        f"profile_{phase}_waiting_seconds"
-                    ]
-                    for result in matching
-                ]
-
-                median_percentage = (
-                    statistics.median(percentages)
+                    f"{name:10} "
+                    f"median wall="
+                    f"{statistics.median(wall_times):.2f}s | "
+                    f"median Python CPU="
+                    f"{statistics.median(cpu_times):.2f}s | "
+                    f"median waiting="
+                    f"{statistics.median(waiting_times):.2f}s"
                 )
 
                 print(
-                    f"    {phase:20} "
-                    f"{median_percentage:6.2f}% "
-                    f"CPU="
-                    f"{statistics.median(cpu_seconds):.2f}s "
-                    f"waiting="
-                    f"{statistics.median(waiting_seconds):.2f}s"
+                    f"{'':10} "
+                    f"median CPU utilisation="
+                    f"{statistics.median(cpu_percentages):.2f}%"
                 )
+
+                print(
+                    "  Median phase wall / CPU / waiting:"
+                )
+
+                for phase in PHASES:
+                    percentages = [
+                        result[
+                            f"profile_{phase}_percent"
+                        ]
+                        for result in matching
+                    ]
+
+                    cpu_seconds = [
+                        result[
+                            f"profile_{phase}_cpu_seconds"
+                        ]
+                        for result in matching
+                    ]
+
+                    waiting_seconds = [
+                        result[
+                            f"profile_{phase}_waiting_seconds"
+                        ]
+                        for result in matching
+                    ]
+
+                    print(
+                        f"    {phase:20} "
+                        f"{statistics.median(percentages):6.2f}% "
+                        f"CPU="
+                        f"{statistics.median(cpu_seconds):.2f}s "
+                        f"waiting="
+                        f"{statistics.median(waiting_seconds):.2f}s"
+                    )
 
 
 def main():
     args = parse_args()
     validate_sizes(args.page_sizes)
+    validate_latency(args.source_rtt_latency)
 
     results_by_key = {}
 
@@ -664,79 +673,77 @@ def main():
 
         generate_sources(pages)
 
-        print("=== Clean benchmark runs ===")
-
-        # First run all clean benchmarks before profiling.
-        for run_number in range(
-            1,
-            REPEATS + 1,
-        ):
+        for source_rtt_ms in args.source_rtt_latency:
             print(
-                f"\nClean run "
-                f"{run_number}/{REPEATS}"
+                f"\n=== Source RTT: {source_rtt_ms} ms ==="
             )
 
-            for name, script in implementation_order(
-                run_number
+            print("=== Clean benchmark runs ===")
+
+            # First run all clean benchmarks before profiling.
+            # This prevents profiling instrumentation from affecting
+            # the clean benchmark sequence.
+            for run_number in range(
+                1,
+                REPEATS + 1,
             ):
-                print(f"Benchmarking {name}...")
-
-                result = run_clean_benchmark(
-                    name,
-                    script,
-                )
-
-                result["workload_pages"] = pages
-
-                result["run"] = run_number
-
-                results_by_key[
-                    (pages, run_number, name)
-                ] = result
-
                 print(
-                    f"  Wall: "
-                    f"{result['clean_wall_seconds']:.2f}s"
+                    f"\nClean run "
+                    f"{run_number}/{REPEATS}"
                 )
 
-                print(
-                    f"  Python CPU: "
-                    f"{result['python_cpu_seconds']:.2f}s"
-                )
+                for name, script in implementation_order(
+                    run_number
+                ):
+                    print(f"Benchmarking {name}...")
+                    result = run_clean_benchmark(
+                        name,
+                        script,
+                        source_rtt_ms,
+                    )
+                    result["workload_pages"] = pages
+                    result["run"] = run_number
+                    results_by_key[
+                        (pages, source_rtt_ms, run_number, name)
+                    ] = result
 
-        print("\n=== Phase profiling runs ===")
+                    print(
+                        f"  Wall: "
+                        f"{result['clean_wall_seconds']:.2f}s"
+                    )
 
-        # Profiling is deliberately done after all clean
-        # benchmarks because the profiler adds overhead.
-        for run_number in range(
-            1,
-            REPEATS + 1,
-        ):
-            print(
-                f"\nProfile run "
-                f"{run_number}/{REPEATS}"
-            )
+                    print(
+                        f"  Python CPU: "
+                        f"{result['python_cpu_seconds']:.2f}s"
+                    )
 
-            for name, _ in implementation_order(
-                run_number
+            print("\n=== Phase profiling runs ===")
+
+            # Profiling is deliberately done after all clean benchmarks
+            # because the profiler adds overhead.
+            for run_number in range(
+                1,
+                REPEATS + 1,
             ):
-                print(f"Profiling {name}...")
-
-                profile = run_profile(name)
-
-                result = results_by_key[
-                    (pages, run_number, name)
-                ]
-
-                add_profile_data(
-                    result,
-                    profile,
-                )
-
                 print(
-                    f"  Profiled wall: "
-                    f"{profile['total_profiled_wall_seconds']:.2f}s"
+                    f"\nProfile run "
+                    f"{run_number}/{REPEATS}"
                 )
+
+                for name, _ in implementation_order(
+                    run_number
+                ):
+                    print(f"Profiling {name}...")
+                    profile = run_profile(name, source_rtt_ms)
+                    result = results_by_key[
+                        (pages, source_rtt_ms, run_number, name)
+                    ]
+                    add_profile_data(result, profile)
+
+                    print(
+                        f"  Profiled wall: "
+                        f"{profile['total_profiled_wall_seconds']:.2f}s"
+                    )
 
     results = [
         results_by_key[key]
@@ -746,13 +753,13 @@ def main():
                 value[0],
                 value[1],
                 value[2],
+                value[3],
             ),
         )
     ]
 
     save_results(results)
     print_summary(results)
-
     print(
         f"\nResults written to: "
         f"{RESULTS_FILE}"
