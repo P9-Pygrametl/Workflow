@@ -91,7 +91,7 @@ if REPEATS < 1:
 DEFAULT_PAGE_SIZES = [100]
 DEFAULT_SOURCE_RTT_MS = [0]
 
-RESULTS_DB = ROOT / "benchmarks" / "benchmark_results.db"
+RESULTS_DB = ROOT / "data" / "benchmark_results.db"
 PROFILE_SCRIPT = ROOT / "benchmarks" / "profile_etl.py"
 
 LATENCY_UP_TOXIC = "latency-up"
