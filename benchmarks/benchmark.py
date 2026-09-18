@@ -6,6 +6,8 @@ import statistics
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -17,10 +19,64 @@ load_dotenv(ROOT / ".env")
 
 DW_DATABASE = os.getenv("DW_DATABASE")
 
-IMPLEMENTATIONS = {
+TOXIPROXY_API = os.getenv("TOXIPROXY_API")
+TOXIPROXY_PROXY = os.getenv("TOXIPROXY_PROXY")
+
+SOURCE_RTT_RAW = os.getenv("SOURCE_RTT_MS")
+
+if SOURCE_RTT_RAW is None:
+    SOURCE_RTT_MS = None
+else:
+    try:
+        SOURCE_RTT_MS = int(SOURCE_RTT_RAW)
+    except ValueError as error:
+        raise ValueError(
+            "SOURCE_RTT_MS must be an integer"
+        ) from error
+
+    if SOURCE_RTT_MS < 0:
+        raise ValueError(
+            "SOURCE_RTT_MS cannot be negative"
+        )
+
+
+ALL_IMPLEMENTATIONS = {
     "csv": "cpygrametl1.py",
     "database": "cpygrametl1_db.py",
 }
+
+BENCHMARK_IMPLEMENTATION = os.getenv(
+    "BENCHMARK_IMPLEMENTATION",
+    "both",
+).lower()
+
+IMPLEMENTATION_ALIASES = {
+    "both": None,
+    "csv": "csv",
+    "db": "database",
+    "database": "database",
+}
+
+if BENCHMARK_IMPLEMENTATION not in IMPLEMENTATION_ALIASES:
+    raise ValueError(
+        "BENCHMARK_IMPLEMENTATION must be one of: "
+        "both, csv, db, database"
+    )
+
+selected_implementation = IMPLEMENTATION_ALIASES[
+    BENCHMARK_IMPLEMENTATION
+]
+
+if selected_implementation is None:
+    IMPLEMENTATIONS = ALL_IMPLEMENTATIONS
+else:
+    IMPLEMENTATIONS = {
+        selected_implementation:
+        ALL_IMPLEMENTATIONS[
+            selected_implementation
+        ]
+    }
+
 
 PHASES = [
     "initialisation",
@@ -35,10 +91,171 @@ PHASES = [
     "other",
 ]
 
-REPEATS = 1
+REPEATS_RAW = os.getenv("REPEATS", "1")
+
+try:
+    REPEATS = int(REPEATS_RAW)
+except ValueError as error:
+    raise ValueError(
+        "REPEATS must be an integer"
+    ) from error
+
+if REPEATS < 1:
+    raise ValueError(
+        "REPEATS must be at least 1"
+    )
 
 RESULTS_FILE = ROOT / "benchmarks" / "benchmark_results.csv"
 PROFILE_SCRIPT = ROOT / "benchmarks" / "profile_etl.py"
+
+LATENCY_UP_TOXIC = "latency-up"
+LATENCY_DOWN_TOXIC = "latency-down"
+
+
+def toxiproxy_request(
+    method,
+    path,
+    payload=None,
+    ignore_not_found=False,
+):
+    url = f"{TOXIPROXY_API}{path}"
+
+    data = None
+    headers = {}
+
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers=headers,
+        method=method,
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request
+        ) as response:
+            return response.read()
+
+    except urllib.error.HTTPError as error:
+        if (
+            ignore_not_found
+            and error.code == 404
+        ):
+            return None
+
+        body = error.read().decode(
+            "utf-8",
+            errors="replace",
+        )
+
+        raise RuntimeError(
+            f"Toxiproxy request failed: "
+            f"{method} {url}\n"
+            f"HTTP {error.code}: {body}"
+        ) from error
+
+    except urllib.error.URLError as error:
+        raise RuntimeError(
+            f"Could not connect to Toxiproxy "
+            f"at {TOXIPROXY_API}: "
+            f"{error.reason}"
+        ) from error
+
+
+def remove_latency_toxics():
+    for toxic in (
+        LATENCY_UP_TOXIC,
+        LATENCY_DOWN_TOXIC,
+    ):
+        toxiproxy_request(
+            "DELETE",
+            (
+                f"/proxies/{TOXIPROXY_PROXY}"
+                f"/toxics/{toxic}"
+            ),
+            ignore_not_found=True,
+        )
+
+
+def configure_toxiproxy(rtt_ms):
+    remove_latency_toxics()
+
+    if rtt_ms == 0:
+        return
+
+    upstream_latency = rtt_ms // 2
+    downstream_latency = (
+        rtt_ms - upstream_latency
+    )
+
+    toxiproxy_request(
+        "POST",
+        (
+            f"/proxies/{TOXIPROXY_PROXY}"
+            "/toxics"
+        ),
+        {
+            "name": LATENCY_UP_TOXIC,
+            "type": "latency",
+            "stream": "upstream",
+            "toxicity": 1.0,
+            "attributes": {
+                "latency": upstream_latency,
+                "jitter": 0,
+            },
+        },
+    )
+
+    toxiproxy_request(
+        "POST",
+        (
+            f"/proxies/{TOXIPROXY_PROXY}"
+            "/toxics"
+        ),
+        {
+            "name": LATENCY_DOWN_TOXIC,
+            "type": "latency",
+            "stream": "downstream",
+            "toxicity": 1.0,
+            "attributes": {
+                "latency": downstream_latency,
+                "jitter": 0,
+            },
+        },
+    )
+
+
+def prepare_implementation(implementation):
+    if implementation != "database":
+        return
+
+    if SOURCE_RTT_MS is None:
+        return
+
+    if not TOXIPROXY_API:
+        raise RuntimeError(
+            "SOURCE_RTT_MS was specified, but "
+            "TOXIPROXY_API is not configured"
+        )
+
+    if not TOXIPROXY_PROXY:
+        raise RuntimeError(
+            "SOURCE_RTT_MS was specified, but "
+            "TOXIPROXY_PROXY is not configured"
+        )
+
+    print(
+        f"  Configuring Toxiproxy for "
+        f"{SOURCE_RTT_MS} ms RTT..."
+    )
+
+    configure_toxiproxy(
+        SOURCE_RTT_MS
+    )
 
 
 def reset_warehouse():
@@ -69,14 +286,19 @@ def implementation_order(run_number):
     )
 
     # Alternate order between runs to reduce systematic
-    # ordering/cache effects.
-    if run_number % 2 == 0:
+    # ordering/cache effects when both implementations run.
+    if (
+        len(implementations) > 1
+        and run_number % 2 == 0
+    ):
         implementations.reverse()
 
     return implementations
 
 
 def run_clean_benchmark(name, script):
+    prepare_implementation(name)
+
     print(f"  Resetting warehouse for {name}...")
     reset_warehouse()
 
@@ -101,12 +323,21 @@ def run_clean_benchmark(name, script):
 
     return {
         "implementation": name,
+        "source_rtt_ms": (
+            SOURCE_RTT_MS
+            if name == "database"
+            else None
+        ),
         "clean_wall_seconds": wall_time,
         "python_cpu_seconds": cpu_time,
     }
 
 
 def run_profile(implementation):
+    prepare_implementation(
+        implementation
+    )
+
     completed = subprocess.run(
         [
             sys.executable,
@@ -120,7 +351,10 @@ def run_profile(implementation):
 
     if completed.returncode != 0:
         print(completed.stdout)
-        print(completed.stderr, file=sys.stderr)
+        print(
+            completed.stderr,
+            file=sys.stderr,
+        )
 
         raise subprocess.CalledProcessError(
             completed.returncode,
@@ -176,6 +410,7 @@ def save_results(results):
     fieldnames = [
         "implementation",
         "run",
+        "source_rtt_ms",
         "clean_wall_seconds",
         "python_cpu_seconds",
         "profiled_wall_seconds",
@@ -190,9 +425,14 @@ def save_results(results):
             ]
         )
 
+    file_exists = (
+        RESULTS_FILE.exists()
+        and RESULTS_FILE.stat().st_size > 0
+    )
+
     with open(
         RESULTS_FILE,
-        "w",
+        "a",
         newline="",
     ) as outfile:
         writer = csv.DictWriter(
@@ -200,7 +440,9 @@ def save_results(results):
             fieldnames=fieldnames,
         )
 
-        writer.writeheader()
+        if not file_exists:
+            writer.writeheader()
+
         writer.writerows(results)
 
 
@@ -233,6 +475,15 @@ def print_summary(results):
             f"{statistics.median(cpu_times):.2f}s"
         )
 
+        if (
+            name == "database"
+            and SOURCE_RTT_MS is not None
+        ):
+            print(
+                f"  Source RTT: "
+                f"{SOURCE_RTT_MS} ms"
+            )
+
         print("  Median phase percentages:")
 
         for phase in PHASES:
@@ -255,6 +506,15 @@ def print_summary(results):
 
 def main():
     results_by_key = {}
+
+    selected_names = ", ".join(
+        IMPLEMENTATIONS
+    )
+
+    print(
+        f"Benchmark implementation(s): "
+        f"{selected_names}"
+    )
 
     print("=== Clean benchmark runs ===")
 
