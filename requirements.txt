@@ -1,0 +1,3 @@
+pygrametl
+psycopg
+python-dotenv
