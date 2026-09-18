@@ -321,6 +321,17 @@ def run_clean_benchmark(name, script):
     wall_time = wall_end - wall_start
     cpu_time = cpu_end - cpu_start
 
+    waiting_time = max(
+        0.0,
+        wall_time - cpu_time,
+    )
+
+    cpu_percent = (
+        cpu_time / wall_time * 100
+        if wall_time > 0
+        else 0.0
+    )
+
     return {
         "implementation": name,
         "source_rtt_ms": (
@@ -330,6 +341,8 @@ def run_clean_benchmark(name, script):
         ),
         "clean_wall_seconds": wall_time,
         "python_cpu_seconds": cpu_time,
+        "waiting_seconds": waiting_time,
+        "cpu_percent": cpu_percent,
     }
 
 
@@ -387,9 +400,16 @@ def add_profile_data(result, profile):
     result["rows"] = profile["rows"]
 
     timings = profile["timings"]
+    timings_cpu = profile["timings_cpu"]
+    timings_waiting = profile["timings_waiting"]
 
     for phase in PHASES:
         seconds = timings.get(phase, 0.0)
+        cpu_seconds = timings_cpu.get(phase, 0.0)
+        waiting_seconds = timings_waiting.get(
+            phase,
+            0.0,
+        )
 
         percentage = (
             seconds / profiled_wall * 100
@@ -405,6 +425,14 @@ def add_profile_data(result, profile):
             f"profile_{phase}_percent"
         ] = percentage
 
+        result[
+            f"profile_{phase}_cpu_seconds"
+        ] = cpu_seconds
+
+        result[
+            f"profile_{phase}_waiting_seconds"
+        ] = waiting_seconds
+
 
 def save_results(results):
     fieldnames = [
@@ -413,6 +441,8 @@ def save_results(results):
         "source_rtt_ms",
         "clean_wall_seconds",
         "python_cpu_seconds",
+        "waiting_seconds",
+        "cpu_percent",
         "profiled_wall_seconds",
         "rows",
     ]
@@ -422,6 +452,8 @@ def save_results(results):
             [
                 f"profile_{phase}_seconds",
                 f"profile_{phase}_percent",
+                f"profile_{phase}_cpu_seconds",
+                f"profile_{phase}_waiting_seconds",
             ]
         )
 
@@ -467,12 +499,30 @@ def print_summary(results):
             for result in matching
         ]
 
+        waiting_times = [
+            result["waiting_seconds"]
+            for result in matching
+        ]
+
+        cpu_percentages = [
+            result["cpu_percent"]
+            for result in matching
+        ]
+
         print(
             f"{name:10} "
             f"median wall="
             f"{statistics.median(wall_times):.2f}s | "
             f"median Python CPU="
-            f"{statistics.median(cpu_times):.2f}s"
+            f"{statistics.median(cpu_times):.2f}s | "
+            f"median waiting="
+            f"{statistics.median(waiting_times):.2f}s"
+        )
+
+        print(
+            f"{'':10} "
+            f"median CPU utilisation="
+            f"{statistics.median(cpu_percentages):.2f}%"
         )
 
         if (
@@ -484,12 +534,28 @@ def print_summary(results):
                 f"{SOURCE_RTT_MS} ms"
             )
 
-        print("  Median phase percentages:")
+        print(
+            "  Median phase wall / CPU / waiting:"
+        )
 
         for phase in PHASES:
             percentages = [
                 result[
                     f"profile_{phase}_percent"
+                ]
+                for result in matching
+            ]
+
+            cpu_seconds = [
+                result[
+                    f"profile_{phase}_cpu_seconds"
+                ]
+                for result in matching
+            ]
+
+            waiting_seconds = [
+                result[
+                    f"profile_{phase}_waiting_seconds"
                 ]
                 for result in matching
             ]
@@ -500,7 +566,11 @@ def print_summary(results):
 
             print(
                 f"    {phase:20} "
-                f"{median_percentage:6.2f}%"
+                f"{median_percentage:6.2f}% "
+                f"CPU="
+                f"{statistics.median(cpu_seconds):.2f}s "
+                f"waiting="
+                f"{statistics.median(waiting_seconds):.2f}s"
             )
 
 
