@@ -166,12 +166,16 @@ The benchmark compares:
 Run the benchmark with:
 
 ```bash
-python3 benchmarks/benchmark.py
+python3 benchmarks/benchmark.py --page-sizes 10 25 50 100
 ```
 
-The benchmark resets the target warehouse between runs and records clean
-wall-clock and Python CPU measurements. It also performs separate profiled
-runs to estimate where time is spent during the ETL.
+The benchmark regenerates the CSV and PostgreSQL source data for each
+requested workload size, then resets the target warehouse between runs and
+records clean wall-clock and Python CPU measurements. It also performs
+separate profiled runs to estimate where time is spent during the ETL.
+
+The values passed to `--page-sizes` are generator page counts. You can provide
+any number of positive integers to compare different workload sizes in one run.
 
 Results are written to:
 
@@ -279,7 +283,7 @@ Verify the generated data:
 psql \
   -h localhost \
   -p 55432 \
-  -U "$USERNAME" \
+  -U "$(whoami)" \
   -d pygrametl_source
 ```
 

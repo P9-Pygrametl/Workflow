@@ -1,3 +1,4 @@
+import argparse
 import os
 import random
 from itertools import islice
@@ -170,6 +171,31 @@ def clear_source_tables(connection):
 
 
 def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate PostgreSQL source data for the ETL benchmark."
+        )
+    )
+
+    parser.add_argument(
+        "--pages",
+        type=int,
+        help=(
+            "Number of pages per domain. "
+            "Defaults to the module configuration."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    if args.pages is not None:
+        if args.pages < 1:
+            raise ValueError(
+                f"--pages must be a positive integer, got {args.pages}"
+            )
+
+        datagenerator.pages = args.pages
+
     username = os.getenv("USERNAME")
     source_database = os.getenv("SOURCE_DATABASE", "pygrametl_source")
     source_host = os.getenv("SOURCE_HOST", "localhost")

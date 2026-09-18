@@ -1,3 +1,4 @@
+import argparse
 import csv
 import json
 import os
@@ -37,8 +38,72 @@ PHASES = [
 
 REPEATS = 1
 
+DEFAULT_PAGE_SIZES = [100]
+
 RESULTS_FILE = ROOT / "benchmarks" / "benchmark_results.csv"
 PROFILE_SCRIPT = ROOT / "benchmarks" / "profile_etl.py"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Benchmark the CSV and PostgreSQL ETL implementations "
+            "across one or more workload sizes."
+        )
+    )
+
+    parser.add_argument(
+        "--page-sizes",
+        nargs="+",
+        dest="page_sizes",
+        type=int,
+        default=DEFAULT_PAGE_SIZES,
+        help=(
+            "Workload sizes expressed as generator page counts. "
+            "Example: --page-sizes 10 25 50 100"
+        ),
+    )
+
+    return parser.parse_args()
+
+
+def validate_sizes(sizes):
+    invalid_sizes = [size for size in sizes if size < 1]
+
+    if invalid_sizes:
+        raise ValueError(
+            f"All sizes must be positive integers, got {invalid_sizes!r}"
+        )
+
+
+def run_generator(script, pages):
+    command = [
+        sys.executable,
+        str(ROOT / script),
+        "--pages",
+        str(pages),
+    ]
+
+    subprocess.run(
+        command,
+        check=True,
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+    )
+
+
+def generate_sources(pages):
+    print(f"Generating source data for pages={pages}...")
+
+    run_generator(
+        "datagenerator/datagenerator.py",
+        pages,
+    )
+
+    run_generator(
+        "datagenerator/datagenerator_db.py",
+        pages,
+    )
 
 
 def reset_warehouse():
@@ -174,6 +239,7 @@ def add_profile_data(result, profile):
 
 def save_results(results):
     fieldnames = [
+        "workload_pages",
         "implementation",
         "run",
         "clean_wall_seconds",
@@ -208,127 +274,150 @@ def print_summary(results):
     print("\nBenchmark summary")
     print("-" * 60)
 
-    for name in IMPLEMENTATIONS:
-        matching = [
-            result
+    workload_sizes = sorted(
+        {
+            result["workload_pages"]
             for result in results
-            if result["implementation"] == name
-        ]
+        }
+    )
 
-        wall_times = [
-            result["clean_wall_seconds"]
-            for result in matching
-        ]
+    for pages in workload_sizes:
+        print(f"\nWorkload: pages={pages}")
 
-        cpu_times = [
-            result["python_cpu_seconds"]
-            for result in matching
-        ]
+        for name in IMPLEMENTATIONS:
+            matching = [
+                result
+                for result in results
+                if result["workload_pages"] == pages
+                and result["implementation"] == name
+            ]
 
-        print(
-            f"{name:10} "
-            f"median wall="
-            f"{statistics.median(wall_times):.2f}s | "
-            f"median Python CPU="
-            f"{statistics.median(cpu_times):.2f}s"
-        )
-
-        print("  Median phase percentages:")
-
-        for phase in PHASES:
-            percentages = [
-                result[
-                    f"profile_{phase}_percent"
-                ]
+            wall_times = [
+                result["clean_wall_seconds"]
                 for result in matching
             ]
 
-            median_percentage = (
-                statistics.median(percentages)
-            )
+            cpu_times = [
+                result["python_cpu_seconds"]
+                for result in matching
+            ]
 
             print(
-                f"    {phase:20} "
-                f"{median_percentage:6.2f}%"
+                f"{name:10} "
+                f"median wall="
+                f"{statistics.median(wall_times):.2f}s | "
+                f"median Python CPU="
+                f"{statistics.median(cpu_times):.2f}s"
             )
+
+            print("  Median phase percentages:")
+
+            for phase in PHASES:
+                percentages = [
+                    result[
+                        f"profile_{phase}_percent"
+                    ]
+                    for result in matching
+                ]
+
+                median_percentage = (
+                    statistics.median(percentages)
+                )
+
+                print(
+                    f"    {phase:20} "
+                    f"{median_percentage:6.2f}%"
+                )
 
 
 def main():
+    args = parse_args()
+    validate_sizes(args.page_sizes)
+
     results_by_key = {}
 
-    print("=== Clean benchmark runs ===")
-
-    # First run all clean benchmarks.
-    # This prevents profiling instrumentation from affecting
-    # the clean benchmark sequence.
-    for run_number in range(
-        1,
-        REPEATS + 1,
-    ):
+    for pages in args.page_sizes:
         print(
-            f"\nClean run "
-            f"{run_number}/{REPEATS}"
+            f"\n=== Workload size: {pages} pages ==="
         )
 
-        for name, script in implementation_order(
-            run_number
+        generate_sources(pages)
+
+        print("=== Clean benchmark runs ===")
+
+        # First run all clean benchmarks.
+        # This prevents profiling instrumentation from affecting
+        # the clean benchmark sequence.
+        for run_number in range(
+            1,
+            REPEATS + 1,
         ):
-            print(f"Benchmarking {name}...")
-
-            result = run_clean_benchmark(
-                name,
-                script,
-            )
-
-            result["run"] = run_number
-
-            results_by_key[
-                (run_number, name)
-            ] = result
-
             print(
-                f"  Wall: "
-                f"{result['clean_wall_seconds']:.2f}s"
+                f"\nClean run "
+                f"{run_number}/{REPEATS}"
             )
 
-            print(
-                f"  Python CPU: "
-                f"{result['python_cpu_seconds']:.2f}s"
-            )
+            for name, script in implementation_order(
+                run_number
+            ):
+                print(f"Benchmarking {name}...")
 
-    print("\n=== Phase profiling runs ===")
+                result = run_clean_benchmark(
+                    name,
+                    script,
+                )
 
-    # Profiling is deliberately done after all clean
-    # benchmarks because the profiler adds overhead.
-    for run_number in range(
-        1,
-        REPEATS + 1,
-    ):
-        print(
-            f"\nProfile run "
-            f"{run_number}/{REPEATS}"
-        )
+                result["workload_pages"] = pages
 
-        for name, _ in implementation_order(
-            run_number
+                result["run"] = run_number
+
+                results_by_key[
+                    (pages, run_number, name)
+                ] = result
+
+                print(
+                    f"  Wall: "
+                    f"{result['clean_wall_seconds']:.2f}s"
+                )
+
+                print(
+                    f"  Python CPU: "
+                    f"{result['python_cpu_seconds']:.2f}s"
+                )
+
+        print("\n=== Phase profiling runs ===")
+
+        # Profiling is deliberately done after all clean
+        # benchmarks because the profiler adds overhead.
+        for run_number in range(
+            1,
+            REPEATS + 1,
         ):
-            print(f"Profiling {name}...")
-
-            profile = run_profile(name)
-
-            result = results_by_key[
-                (run_number, name)
-            ]
-
-            add_profile_data(
-                result,
-                profile,
-            )
-
             print(
-                f"  Profiled wall: "
-                f"{profile['total_profiled_wall_seconds']:.2f}s"
+                f"\nProfile run "
+                f"{run_number}/{REPEATS}"
             )
+
+            for name, _ in implementation_order(
+                run_number
+            ):
+                print(f"Profiling {name}...")
+
+                profile = run_profile(name)
+
+                result = results_by_key[
+                    (pages, run_number, name)
+                ]
+
+                add_profile_data(
+                    result,
+                    profile,
+                )
+
+                print(
+                    f"  Profiled wall: "
+                    f"{profile['total_profiled_wall_seconds']:.2f}s"
+                )
 
     results = [
         results_by_key[key]
@@ -337,6 +426,7 @@ def main():
             key=lambda value: (
                 value[0],
                 value[1],
+                value[2],
             ),
         )
     ]
