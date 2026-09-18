@@ -1,5 +1,5 @@
-import csv
 import json
+import sqlite3
 import os
 import resource
 import statistics
@@ -105,7 +105,7 @@ if REPEATS < 1:
         "REPEATS must be at least 1"
     )
 
-RESULTS_FILE = ROOT / "benchmarks" / "benchmark_results.csv"
+RESULTS_DB = ROOT / "data" / "benchmark_results.db"
 PROFILE_SCRIPT = ROOT / "benchmarks" / "profile_etl.py"
 
 LATENCY_UP_TOXIC = "latency-up"
@@ -435,53 +435,45 @@ def add_profile_data(result, profile):
 
 
 def save_results(results):
-    fieldnames = [
-        "implementation",
-        "run",
-        "source_rtt_ms",
-        "clean_wall_seconds",
-        "python_cpu_seconds",
-        "waiting_seconds",
-        "cpu_percent",
-        "profiled_wall_seconds",
-        "rows",
+    columns = [
+        ("implementation", "TEXT"),
+        ("run", "INTEGER"),
+        ("source_rtt_ms", "REAL"),
+        ("clean_wall_seconds", "REAL"),
+        ("python_cpu_seconds", "REAL"),
+        ("profiled_wall_seconds", "REAL"),
+        ("waiting_seconds", "REAL"),
+        ("cpu_percent", "REAL"),
+        ("rows", "INTEGER"),
+        ("timestamp", "TEXT"),
     ]
 
     for phase in PHASES:
-        fieldnames.extend(
+        columns.append((f"profile_{phase}_seconds", "REAL"))
+        columns.append((f"profile_{phase}_percent", "REAL"))
+
+    column_names = [name for name, _ in columns]
+    column_defs = ", ".join(f"{name} {type_}" for name, type_ in columns)
+    placeholders = ", ".join("?" for _ in columns)
+
+    with sqlite3.connect(RESULTS_DB) as conn:
+        conn.execute(f"CREATE TABLE IF NOT EXISTS results ({column_defs}) STRICT")
+        conn.executemany(
+            f"INSERT INTO results ({', '.join(column_names)}) "
+            f"VALUES ({placeholders})",
             [
-                f"profile_{phase}_seconds",
-                f"profile_{phase}_percent",
-                f"profile_{phase}_cpu_seconds",
-                f"profile_{phase}_waiting_seconds",
-            ]
+                tuple(result.get(name) for name in column_names)
+                for result in results
+            ],
         )
 
-    file_exists = (
-        RESULTS_FILE.exists()
-        and RESULTS_FILE.stat().st_size > 0
-    )
-
-    with open(
-        RESULTS_FILE,
-        "a",
-        newline="",
-    ) as outfile:
-        writer = csv.DictWriter(
-            outfile,
-            fieldnames=fieldnames,
-        )
-
-        if not file_exists:
-            writer.writeheader()
-
-        writer.writerows(results)
+    conn.close()
 
 
 def print_summary(results):
     print("\nBenchmark summary")
     print("-" * 60)
-
+    
     for name in IMPLEMENTATIONS:
         matching = [
             result
@@ -612,6 +604,8 @@ def main():
 
             result["run"] = run_number
 
+            result["timestamp"] = time.asctime()
+
             results_by_key[
                 (run_number, name)
             ] = result
@@ -676,7 +670,7 @@ def main():
 
     print(
         f"\nResults written to: "
-        f"{RESULTS_FILE}"
+        f"{RESULTS_DB.resolve()}"
     )
 
 
