@@ -1,3 +1,4 @@
 pygrametl
 psycopg
+psycopg2
 python-dotenv
