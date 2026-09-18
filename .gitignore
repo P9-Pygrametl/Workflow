@@ -1,0 +1,9 @@
+.env
+/data
+.venv/
+__pycache__/
+*.py[cod]
+DownloadLog.csv
+TestResults.csv
+datagenerator/params.py
+benchmarks/benchmark_results.csv

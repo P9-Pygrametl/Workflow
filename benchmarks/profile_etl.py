@@ -39,42 +39,59 @@ def reset_warehouse():
     )
 
 
-def timed_function(function, timing_name, timings):
+def timed_function(
+    function,
+    timing_name,
+    timings,
+    timings_cpu,
+):
     def wrapper(*args, **kwargs):
-        start = time.perf_counter()
+        wall_start = time.perf_counter()
+        cpu_start = time.process_time()
 
         try:
             return function(*args, **kwargs)
         finally:
             timings[timing_name] += (
-                time.perf_counter() - start
+                time.perf_counter() - wall_start
+            )
+            timings_cpu[timing_name] += (
+                time.process_time() - cpu_start
             )
 
     return wrapper
 
 
 class TimedIterable:
-    def __init__(self, source, timings):
+    def __init__(self, source, timings, timings_cpu):
         self.source = source
         self.timings = timings
+        self.timings_cpu = timings_cpu
         self.rows = 0
 
     def __iter__(self):
         iterator = iter(self.source)
 
         while True:
-            start = time.perf_counter()
+            wall_start = time.perf_counter()
+            cpu_start = time.process_time()
 
             try:
                 row = next(iterator)
             except StopIteration:
                 self.timings["extraction_merge"] += (
-                    time.perf_counter() - start
+                    time.perf_counter() - wall_start
+                )
+                self.timings_cpu["extraction_merge"] += (
+                    time.process_time() - cpu_start
                 )
                 return
 
             self.timings["extraction_merge"] += (
-                time.perf_counter() - start
+                time.perf_counter() - wall_start
+            )
+            self.timings_cpu["extraction_merge"] += (
+                time.process_time() - cpu_start
             )
 
             self.rows += 1
@@ -83,7 +100,7 @@ class TimedIterable:
 
 
 class TimedProxy:
-    def __init__(self, obj, methods, timings):
+    def __init__(self, obj, methods, timings, timings_cpu):
         self._obj = obj
 
         for method_name, timing_name in methods.items():
@@ -96,6 +113,7 @@ class TimedProxy:
                     method,
                     timing_name,
                     timings,
+                    timings_cpu,
                 ),
             )
 
@@ -116,6 +134,10 @@ def profile(implementation):
         "connection_close": 0.0,
     }
 
+    timings_cpu = {
+        name: 0.0 for name in timings
+    }
+
     print(f"Resetting warehouse for {implementation}...")
     reset_warehouse()
 
@@ -125,16 +147,21 @@ def profile(implementation):
 
     # Importing the ETL module creates the database connections,
     # dimensions, fact table and data sources.
-    start = time.perf_counter()
+    wall_start = time.perf_counter()
+    cpu_start = time.process_time()
     module = importlib.import_module(module_name)
     timings["initialisation"] = (
-        time.perf_counter() - start
+        time.perf_counter() - wall_start
+    )
+    timings_cpu["initialisation"] = (
+        time.process_time() - cpu_start
     )
 
     # Measure extraction + MergeJoiningSource.
     timed_input = TimedIterable(
         module.inputdata,
         timings,
+        timings_cpu,
     )
     module.inputdata = timed_input
 
@@ -143,12 +170,14 @@ def profile(implementation):
         module.extractdomaininfo,
         "transformation",
         timings,
+        timings_cpu,
     )
 
     module.extractserverinfo = timed_function(
         module.extractserverinfo,
         "transformation",
         timings,
+        timings_cpu,
     )
 
     # The ETL script calls pygrametl.getint directly.
@@ -160,6 +189,7 @@ def profile(implementation):
             "getint": "transformation",
         },
         timings,
+        timings_cpu,
     )
 
     # Measure top-level pygrametl table operations.
@@ -169,6 +199,7 @@ def profile(implementation):
             "scdensure": "page_dimension",
         },
         timings,
+        timings_cpu,
     )
 
     module.datedim = TimedProxy(
@@ -177,6 +208,7 @@ def profile(implementation):
             "ensure": "date_dimension",
         },
         timings,
+        timings_cpu,
     )
 
     module.testdim = TimedProxy(
@@ -185,6 +217,7 @@ def profile(implementation):
             "lookup": "test_dimension",
         },
         timings,
+        timings_cpu,
     )
 
     module.facttbl = TimedProxy(
@@ -193,6 +226,7 @@ def profile(implementation):
             "insert": "fact_insert",
         },
         timings,
+        timings_cpu,
     )
 
     # Measure commit and closing of the target connection.
@@ -203,6 +237,7 @@ def profile(implementation):
             "close": "connection_close",
         },
         timings,
+        timings_cpu,
     )
 
     # The database-source implementation also closes two source
@@ -214,6 +249,7 @@ def profile(implementation):
                 "close": "connection_close",
             },
             timings,
+            timings_cpu,
         )
 
         module.sourceconn2 = TimedProxy(
@@ -222,13 +258,16 @@ def profile(implementation):
                 "close": "connection_close",
             },
             timings,
+            timings_cpu,
         )
 
     print(f"Profiling {implementation} ETL...")
 
-    start = time.perf_counter()
+    wall_start = time.perf_counter()
+    cpu_start = time.process_time()
     module.main()
-    main_seconds = time.perf_counter() - start
+    main_seconds = time.perf_counter() - wall_start
+    main_cpu_seconds = time.process_time() - cpu_start
 
     # Wrapper installation itself is deliberately excluded.
     total_profiled_wall = (
@@ -236,23 +275,54 @@ def profile(implementation):
         + main_seconds
     )
 
+    total_profiled_cpu = (
+        timings_cpu["initialisation"]
+        + main_cpu_seconds
+    )
+
     measured = sum(timings.values())
+    measured_cpu = sum(timings_cpu.values())
 
     timings["other"] = max(
         0.0,
         total_profiled_wall - measured,
     )
 
+    timings_cpu["other"] = max(
+        0.0,
+        total_profiled_cpu - measured_cpu,
+    )
+
+    timings_waiting = {
+        name: max(
+            0.0,
+            timings[name] - timings_cpu[name],
+        )
+        for name in timings
+    }
+
     result = {
         "implementation": implementation,
         "rows": timed_input.rows,
         "total_profiled_wall_seconds": total_profiled_wall,
+        "total_profiled_cpu_seconds": total_profiled_cpu,
         "timings": timings,
+        "timings_cpu": timings_cpu,
+        "timings_waiting": timings_waiting,
     }
 
     print()
     print("Phase profile")
-    print("-" * 55)
+    print("-" * 78)
+    print(
+        f"{'phase':22}"
+        f"{'wall':>10} "
+        f"{'wall%':>7} "
+        f"{'cpu':>10} "
+        f"{'waiting':>10} "
+        f"{'cpu%':>7}"
+    )
+    print("-" * 78)
 
     for name, seconds in timings.items():
         percentage = (
@@ -261,17 +331,32 @@ def profile(implementation):
             else 0.0
         )
 
-        print(
-            f"{name:22}"
-            f"{seconds:10.2f}s "
-            f"{percentage:7.2f}%"
+        cpu_seconds = timings_cpu[name]
+        waiting_seconds = timings_waiting[name]
+
+        cpu_percentage = (
+            cpu_seconds / total_profiled_wall * 100
+            if total_profiled_wall > 0
+            else 0.0
         )
 
-    print("-" * 55)
+        print(
+            f"{name:22}"
+            f"{seconds:9.2f}s "
+            f"{percentage:6.2f}% "
+            f"{cpu_seconds:9.2f}s "
+            f"{waiting_seconds:9.2f}s "
+            f"{cpu_percentage:6.2f}%"
+        )
+
+    print("-" * 78)
     print(
         f"{'total':22}"
-        f"{total_profiled_wall:10.2f}s "
-        f"{100.00:7.2f}%"
+        f"{total_profiled_wall:9.2f}s "
+        f"{100.00:6.2f}% "
+        f"{total_profiled_cpu:9.2f}s "
+        f"{max(0.0, total_profiled_wall - total_profiled_cpu):9.2f}s "
+        f"{(total_profiled_cpu / total_profiled_wall * 100) if total_profiled_wall > 0 else 0.0:6.2f}%"
     )
 
     print()
