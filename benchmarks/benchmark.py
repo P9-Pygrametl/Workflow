@@ -243,14 +243,14 @@ def prepare_implementation(implementation, rtt_ms):
 
     if not TOXIPROXY_API:
         raise RuntimeError(
-            "A non-zero latency was specified, but "
-            "TOXIPROXY_API is not configured"
+            "Cannot apply {rtt_ms} ms latency because "
+            "TOXIPROXY_API is not configured in .env."
         )
 
     if not TOXIPROXY_PROXY:
         raise RuntimeError(
-            "A non-zero latency was specified, but "
-            "TOXIPROXY_PROXY is not configured"
+            "Cannot apply {rtt_ms} ms latency because "
+            "TOXIPROXY_PROXY is not configured in .env"
         )
 
     print(
@@ -587,7 +587,7 @@ def print_summary(results):
         for source_rtt_ms in latencies:
             print(
                 f"\nWorkload: pages={pages}, "
-                f"RTT={source_rtt_ms} ms"
+                f"RTT latency={source_rtt_ms} ms"
             )
 
             for name in IMPLEMENTATIONS:
