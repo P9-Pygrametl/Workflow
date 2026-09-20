@@ -122,7 +122,8 @@ def toxiproxy_request(
 
     try:
         with urllib.request.urlopen(
-            request
+            request,
+            timeout=10
         ) as response:
             return response.read()
 
@@ -150,25 +151,41 @@ def toxiproxy_request(
             f"at {TOXIPROXY_API}: "
             f"{error.reason}"
         ) from error
+    
 
+def reset_latency_toxics(strict=True):
+    if not (TOXIPROXY_API and TOXIPROXY_PROXY):
+        return False
 
-def remove_latency_toxics():
-    for toxic in (
-        LATENCY_UP_TOXIC,
-        LATENCY_DOWN_TOXIC,
-    ):
-        toxiproxy_request(
-            "DELETE",
-            (
-                f"/proxies/{TOXIPROXY_PROXY}"
-                f"/toxics/{toxic}"
-            ),
-            ignore_not_found=True,
+    try:
+        for toxic in (
+                LATENCY_UP_TOXIC,
+                LATENCY_DOWN_TOXIC,
+            ):
+            toxiproxy_request(
+                "DELETE",
+                (
+                    f"/proxies/{TOXIPROXY_PROXY}"
+                    f"/toxics/{toxic}"
+                ),
+                ignore_not_found=True,
+            )
+    except (RuntimeError, OSError) as error:
+        if strict:
+            raise
+        print(
+            f"Warning: could not reset Toxiproxy latency toxics: {error}\n"
+            f"Check manually: curl {TOXIPROXY_API}/proxies/"
+            f"{TOXIPROXY_PROXY}/toxics",
+            file=sys.stderr,
         )
+        return False
+
+    return True
 
 
 def configure_toxiproxy(rtt_ms):
-    remove_latency_toxics()
+    reset_latency_toxics(strict=True)
 
     if rtt_ms == 0:
         return
@@ -321,6 +338,7 @@ def run_generator(script, pages):
 
 
 def generate_sources(pages):
+    reset_latency_toxics(strict=True)
     print(f"Generating source data for pages={pages}...")
 
     run_generator(
@@ -657,104 +675,105 @@ def main():
     args = parse_args()
     validate_sizes(args.page_sizes)
     validate_latency(args.source_rtt_latency)
+    try:
+        results_by_key = {}
 
-    results_by_key = {}
-
-    for pages in args.page_sizes:
-        print(
-            f"\n=== Workload size: {pages} pages ==="
-        )
-
-        generate_sources(pages)
-
-        for source_rtt_ms in args.source_rtt_latency:
+        for pages in args.page_sizes:
             print(
-                f"\n=== Source RTT: {source_rtt_ms} ms ==="
+                f"\n=== Workload size: {pages} pages ==="
             )
-
-            print("=== Clean benchmark runs ===")
-
-            # First run all clean benchmarks before profiling.
-            # This prevents profiling instrumentation from affecting
-            # the clean benchmark sequence.
-            for run_number in range(
-                1,
-                REPEATS + 1,
-            ):
+    
+            generate_sources(pages)
+    
+            for source_rtt_ms in args.source_rtt_latency:
                 print(
-                    f"\nClean run "
-                    f"{run_number}/{REPEATS}"
+                    f"\n=== Source RTT: {source_rtt_ms} ms ==="
                 )
-
-                for name, script in implementation_order(
-                    run_number
+    
+                print("=== Clean benchmark runs ===")
+    
+                # First run all clean benchmarks before profiling.
+                # This prevents profiling instrumentation from affecting
+                # the clean benchmark sequence.
+                for run_number in range(
+                    1,
+                    REPEATS + 1,
                 ):
-                    print(f"Benchmarking {name}...")
-                    result = run_clean_benchmark(
-                        name,
-                        script,
-                        source_rtt_ms,
-                    )
-                    result["workload_pages"] = pages
-                    result["run"] = run_number
-                    result["source_rtt_ms"] = source_rtt_ms
-                    result["timestamp"] = time.asctime()
-                    results_by_key[
-                        (pages, source_rtt_ms, run_number, name)
-                    ] = result
-
                     print(
-                        f"  Wall: "
-                        f"{result['clean_wall_seconds']:.2f}s"
+                        f"\nClean run "
+                        f"{run_number}/{REPEATS}"
                     )
-
-                    print(
-                        f"  Python CPU: "
-                        f"{result['python_cpu_seconds']:.2f}s"
-                    )
-
-            print("\n=== Phase profiling runs ===")
-
-            # Profiling is deliberately done after all clean benchmarks
-            # because the profiler adds overhead.
-            for run_number in range(
-                1,
-                REPEATS + 1,
-            ):
-                print(
-                    f"\nProfile run "
-                    f"{run_number}/{REPEATS}"
-                )
-
-                for name, _ in implementation_order(
-                    run_number
+    
+                    for name, script in implementation_order(
+                        run_number
+                    ):
+                        print(f"Benchmarking {name}...")
+                        result = run_clean_benchmark(
+                            name,
+                            script,
+                            source_rtt_ms,
+                        )
+                        result["workload_pages"] = pages
+                        result["run"] = run_number
+                        result["source_rtt_ms"] = source_rtt_ms
+                        result["timestamp"] = time.asctime()
+                        results_by_key[
+                            (pages, source_rtt_ms, run_number, name)
+                        ] = result
+    
+                        print(
+                            f"  Wall: "
+                            f"{result['clean_wall_seconds']:.2f}s"
+                        )
+    
+                        print(
+                            f"  Python CPU: "
+                            f"{result['python_cpu_seconds']:.2f}s"
+                        )
+    
+                print("\n=== Phase profiling runs ===")
+    
+                # Profiling is deliberately done after all clean benchmarks
+                # because the profiler adds overhead.
+                for run_number in range(
+                    1,
+                    REPEATS + 1,
                 ):
-                    print(f"Profiling {name}...")
-                    profile = run_profile(name, source_rtt_ms)
-                    result = results_by_key[
-                        (pages, source_rtt_ms, run_number, name)
-                    ]
-                    add_profile_data(result, profile)
-
                     print(
-                        f"  Profiled wall: "
-                        f"{profile['total_profiled_wall_seconds']:.2f}s"
+                        f"\nProfile run "
+                        f"{run_number}/{REPEATS}"
                     )
-
-    results = [
-        results_by_key[key]
-        for key in sorted(
-            results_by_key,
-            key=lambda value: (
-                value[0],
-                value[1],
-                value[2],
-                value[3],
-            ),
-        )
-    ]
-
-    save_results(results)
+    
+                    for name, _ in implementation_order(
+                        run_number
+                    ):
+                        print(f"Profiling {name}...")
+                        profile = run_profile(name, source_rtt_ms)
+                        result = results_by_key[
+                            (pages, source_rtt_ms, run_number, name)
+                        ]
+                        add_profile_data(result, profile)
+    
+                        print(
+                            f"  Profiled wall: "
+                            f"{profile['total_profiled_wall_seconds']:.2f}s"
+                        )
+    
+        results = [
+            results_by_key[key]
+            for key in sorted(
+                results_by_key,
+                key=lambda value: (
+                    value[0],
+                    value[1],
+                    value[2],
+                    value[3],
+                ),
+            )
+        ]
+        save_results(results)
+    finally:
+        reset_latency_toxics(strict=False)
     print_summary(results)
     print(
         f"\nResults written to: "
