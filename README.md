@@ -249,14 +249,13 @@ docker compose \
 
 ## Legacy setups
 
-Older ways of running the ETL. The benchmark doesn't need these. Each section
-lists its own steps. PostgreSQL itself is installed as described in
-[Setup](#setup).
+Older ways of running the ETL. The benchmark doesn't need these. Complete
+[Setup](#setup) first.
 
-### Jython ('pygrametl1.py')
+### Jython (`pygrametl1.py`)
 
 The original Jython-based example (`pygrametl1.py`). 
- 
+
 Change lines 20-21 in `pygrametl1.py` to use your system username instead of
 `chr`. On Arch:
  
@@ -276,26 +275,24 @@ python3 datagenerator/datagenerator.py
 jython -J-cp /usr/share/java/postgresql-jdbc/postgresql.jar pygrametl1.py
 ```
 
-#### CPython, CSV Source (cpygrametl1.py'):
+### CPython, CSV source (`cpygrametl1.py`)
 
-Setup .env with your system username.
+**Arch:**
 
-**Arch**:
-
-```
+```bash
 sudo -u postgres createdb -O YOURUSERNAME YOURUSERNAME
 psql -f starschema.sql
 
 python3 ./datagenerator/datagenerator.py
-python3 cpygrametl1.py //or python3 cpygrametl1spy3.py
+python3 cpygrametl1.py # or python3 cpygrametl1spy3.py
 ```
 
-**MacOS**
+**MacOS:**
 
 ```bash
 createdb "$(whoami)"
 psql -f starschema.sql
 
 python3 ./datagenerator/datagenerator.py
-python3 cpygrametl1.py //or python3 cpygrametl1spy3.py
+python3 cpygrametl1.py # or python3 cpygrametl1spy3.py
 ```
