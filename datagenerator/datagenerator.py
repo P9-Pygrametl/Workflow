@@ -16,42 +16,30 @@
 #  along with this program.  If not, see <http://www.gnu.org/licenses/>.  
 #  
 
+import argparse
+import importlib
 import random
 
 try:
-    from params import toplevels
-except ImportError:
-    toplevels = 15
+    params = importlib.import_module("params")
+except ModuleNotFoundError:
+    params = None
 
-try:
-    from params import domains
-except ImportError:
-    domains = 100
 
-try:
-    from params import pages
-except ImportError:
-    pages = 100
+def read_param(name, default):
+    if params is None:
+        return default
 
-try:
-    from params import months
-except ImportError:
-    months = 12
+    return getattr(params, name, default)
 
-try:
-    from params import changeprob
-except ImportError:
-    changeprob = 50
 
-try:
-    from params import startyear
-except ImportError:
-    startyear = 2008
-
-try:
-    from params import tests
-except ImportError:
-    tests = 5
+toplevels = read_param("toplevels", 15)
+domains = read_param("domains", 50)
+pages = read_param("pages", 100)
+months = read_param("months", 12)
+changeprob = read_param("changeprob", 50)
+startyear = read_param("startyear", 2008)
+tests = read_param("tests", 5)
 
 def generateurls():
     toplevellist = ["tl%d" % (i,) for i in range(toplevels)]
@@ -135,7 +123,36 @@ def writeline(outfile, fields):
 
 
 import sys
-if __name__ == "__main__":
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate CSV source data for the ETL benchmark."
+        )
+    )
+
+    parser.add_argument(
+        "--pages",
+        type=int,
+        help=(
+            "Number of pages per domain. "
+            "Defaults to the module configuration."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    global pages
+
+    if args.pages is not None:
+        if args.pages < 1:
+            raise ValueError(
+                f"--pages must be a positive integer, got {args.pages}"
+            )
+
+        pages = args.pages
+
     downloadlog = open('DownloadLog.csv', 'w+', 16384)
     testresults = open('TestResults.csv', 'w', 16384)
     writeline(downloadlog, ['localfile', 'url', 'serverversion', 'size',
@@ -146,3 +163,7 @@ if __name__ == "__main__":
     generatetestresults(downloadlog, testresults)
     downloadlog.close()
     testresults.close()
+
+
+if __name__ == "__main__":
+    main()
