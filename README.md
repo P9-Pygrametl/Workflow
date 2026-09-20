@@ -1,86 +1,44 @@
-Arch Linux:
-This creates a postgres instance on your machine which is not optimal, but for a starting point it may be fine
+# pygrametl ETL Benchmarks
 
-In pygrametl1.py change line 20-21 to use your system username instead of chr
+## Contents
+- [Setup](#setup)
+- [Running the ETL](#running-the-etl)
+- [Benchmarking](#benchmarking)
+- [Network-latency benchmarking](#network-latency-benchmarking-docker--toxiproxy)
+- [Legacy Setups](#legacy-setups)
 
-Then afterwards run these commands:
+## Setup
 
-```
-python3 -m venv .venv
-source .venv/bin/activate 
+### 1. Python environment
 
-python3 ./datagenerator/datagenerator.py
-
-yay -S jython postgresql-jdbc postgresql
-
-sudo ln -s /opt/jython/bin/jython /usr/local/bin/jython
-hash -r
-
-sudo -u postgres initdb -D /var/lib/postgres/data
-
-sudo systemctl enable --now postgresql
-
-sudo /opt/jython/bin/pip-jython install "pygrametl==2.6"
-
-sudo -u postgres createuser YOURUSERNAME
-sudo -u postgres createdb -O YOURUSERNAME YOURUSERNAME
-
-psql -f starschema.sql
-
-jython -J-cp /usr/share/java/postgresql-jdbc/postgresql.jar pygrametl1.py
-```
-
-
-CPython:
-
-Setup .env with your system username
-Arch:
-```
-python3 -m venv .venv
-source .venv/bin/activate 
-
-python3 ./datagenerator/datagenerator.py
-
-yay -S postgresql
-
-sudo -u postgres initdb -D /var/lib/postgres/data
-
-sudo systemctl enable --now postgresql
-
-sudo -u postgres createuser YOURUSERNAME
-sudo -u postgres createdb -O YOURUSERNAME YOURUSERNAME
-
-pip install -r requirements.txt
-
-psql -f starschema.sql
-
-python3 cpygrametl1.py //or python3 cpygrametl1spy3.py
-```
-
-MacOS:
-```
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
-
-python3 ./datagenerator/datagenerator.py
-
-brew install postgresql
-brew services start postgresql
-
-createdb "$(whoami)"
-
 pip install -r requirements.txt
-
-psql -f starschema.sql
-
-python3 cpygrametl1.py //or python3 cpygrametl1spy3.py
 ```
 
+### 2. PostgreSQL
 
-## PostgreSQL Source Database
+This installs PostgreSQL directly on your machine. The [Docker setup](#network-latency-benchmarking-docker--toxiproxy)
+moves the source database into a container instead.
 
-The project supports benchmarking the original CSV-based ETL against an
-equivalent PostgreSQL source.
+**Arch Linux**
+ 
+```bash
+yay -S postgresql
+sudo -u postgres initdb -D /var/lib/postgres/data
+sudo systemctl enable --now postgresql
+sudo -u postgres createuser YOURUSERNAME
+```
+ 
+**macOS**
+ 
+```bash
+brew install postgresql
+brew services start postgresql
+```
+
+### 3. Configuration
 
 Create a `.env` file in the project root based on `example.env`:
 
@@ -90,161 +48,159 @@ SOURCE_DATABASE="pygrametl_source"
 DW_DATABASE="pygrametl_dw"
 SOURCE_HOST="localhost"
 SOURCE_PORT="5432"
+ 
+# Needed for latency benchmarks
+TOXIPROXY_API="http://localhost:8474"
+TOXIPROXY_PROXY="source-postgres"
 ```
 
-`SOURCE_HOST` and `SOURCE_PORT` specify where the PostgreSQL source database
-is running. The defaults above use a PostgreSQL instance running locally.
+| Variable | Meaning |
+|---|---|
+| `USERNAME` | Your system username, used to connect to PostgreSQL |
+| `SOURCE_DATABASE` | Database holding the PostgreSQL source data |
+| `DW_DATABASE` | Target data warehouse database |
+| `SOURCE_HOST`, `SOURCE_PORT` | Where the source database runs (defaults to local PostgreSQL) |
+| `TOXIPROXY_API`, `TOXIPROXY_PROXY` | Toxiproxy API URL and proxy name, required for non-zero latency |
 
-Create the source and target databases:
+### 4. Databases and schema
 
+**Arch Linux**
+ 
+```bash
+sudo -u postgres createdb -O YOURUSERNAME pygrametl_source
+sudo -u postgres createdb -O YOURUSERNAME pygrametl_dw
+```
+ 
+**macOS**
+ 
 ```bash
 createdb pygrametl_source
 createdb pygrametl_dw
 ```
-
+ 
 Create the warehouse schema:
-
+ 
 ```bash
-psql pygrametl_dw < starschema.sql
+psql pygrametl_dw -f starschema.sql
 ```
 
-Generate the original CSV source data:
-
-```bash
-python3 datagenerator/datagenerator.py
-```
-
-Generate the equivalent PostgreSQL source data:
+## Running the ETL
 
 ```bash
 python3 datagenerator/datagenerator_db.py
-```
-
-With the default generator settings, the PostgreSQL source contains:
-
-```text
-downloadlog: 1,800,000 rows
-testresults: 9,000,000 rows
-```
-
-The PostgreSQL-source ETL can then be run with:
-
-```bash
 python3 cpygrametl1_db.py
 ```
 
-The target warehouse is stored in `pygrametl_dw` using the
-`pygrametlexa` schema.
-
-To verify the result:
-
+### Verifying the result
+ 
+The ETL writes to the `pygrametlexa` schema in `DW_DATABASE`:
+ 
 ```bash
 psql pygrametl_dw
 ```
-
-Then:
-
+ 
 ```sql
 SELECT COUNT(*) FROM pygrametlexa.testresults;
 SELECT COUNT(*) FROM pygrametlexa.page;
 ```
 
 With the default generated data, the expected result is:
-
+ 
 ```text
 testresults: 9,000,000 rows
 page:          974,535 rows
 ```
 
+
 ## Benchmarking
 
-The benchmark compares:
-
-- `cpygrametl1.py`: CSV source
-- `cpygrametl1_db.py`: PostgreSQL source
-
-Run the benchmark with:
+The benchmark compares `cpygrametl1.py` (CSV source) and `cpygrametl1_db.py`
+(PostgreSQL source). For each page size it regenerates the source data itself
+and resets the warehouse before every run, so you don't need to run the
+generator first.
 
 ```bash
-python3 benchmarks/benchmark.py --page-sizes 10 25 50 100
+python3 benchmarks/benchmark.py
 ```
 
-The benchmark regenerates the CSV and PostgreSQL source data for each
-requested workload size, then resets the target warehouse between runs and
-records clean wall-clock and Python CPU measurements. It also performs
-separate profiled runs to estimate where time is spent during the ETL.
+### Options
+ 
+| Option | Meaning | Default |
+|---|---|---|
+| `--page-sizes N [N ...]` | Workload sizes, as generator page counts | `100` |
+| `--source-rtt-latency MS [MS ...]` | Simulated round-trip times to the PostgreSQL source, in milliseconds. Needs [Toxiproxy](#network-latency-benchmarking-docker--toxiproxy) | `0` |
 
-The values passed to `--page-sizes` are generator page counts. You can provide
-any number of positive integers to compare different workload sizes in one run.
+Every page size is run at every latency, for example:
+ 
+```bash
+SOURCE_HOST=localhost SOURCE_PORT=15432 \
+python3 benchmarks/benchmark.py --page-sizes 1 2 --source-rtt-latency 0 50 100
+```
 
-Results are written to:
+> **Important:** `--source-rtt-latency` only has an effect when
+> `SOURCE_PORT=15432`. On any other port the ETL bypasses the proxy and
+> the latency is never applied.
+ 
+For each RTT, the script splits the delay evenly between the upstream and
+downstream directions. It clears any leftover latency before generating data
+and again when it finishes.
 
+### Environment variables
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `REPEATS` | Repetitions per configuration | `1` |
+| `BENCHMARK_IMPLEMENTATION` | `both`, `csv`, or `db` / `database` | `both` |
+ 
+With `REPEATS=1` each result is a single measurement, so use `REPEATS=3` or
+more if you want to compare small differences.
+
+### Results
+
+Results are appended to a SQLite database, one row per run:
+ 
 ```text
-benchmarks/benchmark_results.csv
+data/benchmark_results.db    (table: results)
 ```
 
-The benchmark results file is generated locally and should not be committed.
+## Network-latency benchmarking (Docker + Toxiproxy)
 
-The number of repetitions can be configured using `REPEATS` in
-`benchmarks/benchmark.py`.
-
-## Docker PostgreSQL Source and Network-Latency Benchmarking
-
-A Docker-based PostgreSQL source can be used to investigate the effect of
-network overhead and artificial latency on database extraction.
-
-The target warehouse remains the normal local `pygrametl_dw` database.
-Only the source database is moved into Docker.
-
-The setup uses:
-
-- PostgreSQL in Docker
-- Toxiproxy in Docker
-- port `55432` for direct access to the Docker PostgreSQL source
-- port `15432` for access through Toxiproxy
-- port `8474` for the Toxiproxy API
-
-This gives the following paths:
-
+The setup uses PostgreSQL and Toxiproxy containers, with these paths:
+ 
 ```text
-localhost:5432
-    -> local PostgreSQL
-
-localhost:55432
-    -> Docker PostgreSQL directly
-
-localhost:15432
-    -> Toxiproxy
-    -> Docker PostgreSQL
+localhost:5432   -> local PostgreSQL
+ 
+localhost:55432  -> Docker PostgreSQL (direct)
+ 
+localhost:15432  -> Toxiproxy -> Docker PostgreSQL
 ```
 
-### Start the Docker Environment
-
+### 1. Start the containers
+ 
 Docker must be installed and running.
-
-Start the PostgreSQL and Toxiproxy containers:
-
+ 
 ```bash
 docker compose \
   -f docker-compose.network-benchmark.yml \
   --env-file .env \
   up -d
 ```
-
-Check that both containers are running:
-
+ 
+Check that both containers are running. PostgreSQL should eventually report
+`healthy`:
+ 
 ```bash
 docker compose \
   -f docker-compose.network-benchmark.yml \
   ps
 ```
-
-The PostgreSQL container should eventually report `healthy`.
-
-### Configure Toxiproxy
-
-Create a proxy which forwards port `15432` to the PostgreSQL container:
-
+ 
+### 2. Create the Toxiproxy proxy
+ 
+This forwards port `15432` to the PostgreSQL container. Check first with
+`curl http://localhost:8474/proxies`, and skip this step if `source-postgres`
+is already listed.
+ 
 ```bash
 curl -X POST http://localhost:8474/proxies \
   -H "Content-Type: application/json" \
@@ -255,94 +211,91 @@ curl -X POST http://localhost:8474/proxies \
   }'
 ```
 
-Verify the proxy:
-
-```bash
-curl http://localhost:8474/proxies
-```
-
-Initially the proxy contains no toxics, meaning that no artificial latency
-is added.
-
-### Generate the Docker Source Data
-
-Generate the PostgreSQL source data directly against the Docker PostgreSQL
-instance:
-
-```bash
-SOURCE_HOST=localhost SOURCE_PORT=55432 \
-python3 datagenerator/datagenerator_db.py
-```
-
-The values supplied before the command override `SOURCE_HOST` and
-`SOURCE_PORT` from `.env` for that command only.
-
-Verify the generated data:
-
-```bash
-psql \
-  -h localhost \
-  -p 55432 \
-  -U "$(whoami)" \
-  -d pygrametl_source
-```
-
-Then:
-
-```sql
-SELECT COUNT(*) FROM downloadlog;
-SELECT COUNT(*) FROM testresults;
-```
-
-The expected counts are:
-
-```text
-downloadlog:  1,800,000
-testresults:  9,000,000
-```
-
-### Benchmark the Docker Database Directly
-
-To benchmark PostgreSQL running in Docker without Toxiproxy:
-
+### 3. Run the benchmark
+ 
+**Docker PostgreSQL directly** (no Toxiproxy):
+ 
 ```bash
 SOURCE_HOST=localhost SOURCE_PORT=55432 \
 python3 benchmarks/benchmark.py
 ```
-
-### Benchmark Through Toxiproxy
-
-To benchmark the same Docker PostgreSQL database through Toxiproxy:
+ 
+**Through Toxiproxy**:
 
 ```bash
 SOURCE_HOST=localhost SOURCE_PORT=15432 \
 python3 benchmarks/benchmark.py
 ```
 
-With no toxics configured, this represents the Docker + Toxiproxy
-zero-latency baseline.
+Use the 0 ms run through Toxiproxy as the baseline for latency experiments,
+not local PostgreSQL on port 5432.
 
-This baseline should be used when evaluating artificial network latency,
-rather than comparing latency experiments directly against the normal
-local PostgreSQL instance.
-
-### Stop the Docker Environment
-
-Stop the containers with:
-
+### 4. Stop the containers
+ 
 ```bash
 docker compose \
   -f docker-compose.network-benchmark.yml \
   down
 ```
-
-The generated PostgreSQL source data is stored in a Docker volume and is
-therefore preserved when the containers are stopped.
-
-To also delete the generated database volume:
-
+ 
+The generated source data lives in a Docker volume and survives this. To
+delete the volume as well:
+ 
 ```bash
 docker compose \
   -f docker-compose.network-benchmark.yml \
   down -v
+```
+
+## Legacy setups
+
+Older ways of running the ETL. The benchmark doesn't need these. Each section
+lists its own steps. PostgreSQL itself is installed as described in
+[Setup](#setup).
+
+### Jython ('pygrametl1.py')
+
+The original Jython-based example (`pygrametl1.py`). 
+ 
+Change lines 20-21 in `pygrametl1.py` to use your system username instead of
+`chr`. On Arch:
+ 
+```bash
+yay -S jython postgresql-jdbc
+ 
+sudo ln -s /opt/jython/bin/jython /usr/local/bin/jython
+hash -r
+ 
+sudo /opt/jython/bin/pip-jython install "pygrametl==2.6"
+ 
+sudo -u postgres createdb -O YOURUSERNAME YOURUSERNAME
+psql -f starschema.sql
+
+python3 datagenerator/datagenerator.py
+ 
+jython -J-cp /usr/share/java/postgresql-jdbc/postgresql.jar pygrametl1.py
+```
+
+#### CPython, CSV Source (cpygrametl1.py'):
+
+Setup .env with your system username.
+
+**Arch**:
+
+```
+sudo -u postgres createdb -O YOURUSERNAME YOURUSERNAME
+psql -f starschema.sql
+
+python3 ./datagenerator/datagenerator.py
+python3 cpygrametl1.py //or python3 cpygrametl1spy3.py
+```
+
+**MacOS**
+
+```bash
+createdb "$(whoami)"
+psql -f starschema.sql
+
+python3 ./datagenerator/datagenerator.py
+python3 cpygrametl1.py //or python3 cpygrametl1spy3.py
 ```
