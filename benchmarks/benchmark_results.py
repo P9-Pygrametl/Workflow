@@ -69,6 +69,7 @@ def save_results(results):
                 for result in results
             ],
         )
+    connection.close()
 
 
 def print_summary(results):
