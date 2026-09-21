@@ -6,7 +6,6 @@ from benchmark_config import DW_DATABASE, PHASES, ROOT
 
 
 IMPLEMENTATIONS = {
-    "csv": "cpygrametl1",
     "database": "cpygrametl1_db",
 }
 

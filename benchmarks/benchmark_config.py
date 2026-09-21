@@ -12,26 +12,23 @@ TOXIPROXY_API = os.getenv("TOXIPROXY_API")
 TOXIPROXY_PROXY = os.getenv("TOXIPROXY_PROXY")
 
 ALL_IMPLEMENTATIONS = {
-    "csv": "cpygrametl1.py",
     "database": "cpygrametl1_db.py",
 }
 
 IMPLEMENTATION_ALIASES = {
-    "both": None,
-    "csv": "csv",
     "db": "database",
     "database": "database",
 }
 
 BENCHMARK_IMPLEMENTATION = os.getenv(
     "BENCHMARK_IMPLEMENTATION",
-    "both",
+    "database",
 ).lower()
 
 if BENCHMARK_IMPLEMENTATION not in IMPLEMENTATION_ALIASES:
     raise ValueError(
         "BENCHMARK_IMPLEMENTATION must be one of: "
-        "both, csv, db, database"
+        "db, database"
     )
 
 selected_implementation = IMPLEMENTATION_ALIASES[

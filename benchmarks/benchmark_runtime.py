@@ -142,7 +142,6 @@ def run_generator(script, pages):
 def generate_sources(pages):
     reset_latency_toxics(strict=True)
     print(f"Generating source data for pages={pages}...")
-    run_generator("datagenerator/datagenerator.py", pages)
     run_generator("datagenerator/datagenerator_db.py", pages)
 
 
