@@ -11,38 +11,9 @@ DW_DATABASE = os.getenv("DW_DATABASE")
 TOXIPROXY_API = os.getenv("TOXIPROXY_API")
 TOXIPROXY_PROXY = os.getenv("TOXIPROXY_PROXY")
 
-ALL_IMPLEMENTATIONS = {
+IMPLEMENTATIONS = {
     "database": "cpygrametl1_db.py",
 }
-
-IMPLEMENTATION_ALIASES = {
-    "db": "database",
-    "database": "database",
-}
-
-BENCHMARK_IMPLEMENTATION = os.getenv(
-    "BENCHMARK_IMPLEMENTATION",
-    "database",
-).lower()
-
-if BENCHMARK_IMPLEMENTATION not in IMPLEMENTATION_ALIASES:
-    raise ValueError(
-        "BENCHMARK_IMPLEMENTATION must be one of: "
-        "db, database"
-    )
-
-selected_implementation = IMPLEMENTATION_ALIASES[
-    BENCHMARK_IMPLEMENTATION
-]
-
-if selected_implementation is None:
-    IMPLEMENTATIONS = ALL_IMPLEMENTATIONS
-else:
-    IMPLEMENTATIONS = {
-        selected_implementation: ALL_IMPLEMENTATIONS[
-            selected_implementation
-        ]
-    }
 
 PHASES = [
     "initialisation",

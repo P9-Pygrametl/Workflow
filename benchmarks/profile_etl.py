@@ -11,7 +11,7 @@ os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from profile_runtime import IMPLEMENTATIONS, profile  # noqa: E402
+from profile_runtime import profile  # noqa: E402
 
 
 def main():
@@ -20,7 +20,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "implementation",
-        choices=IMPLEMENTATIONS,
+        choices=["database"],
         help="ETL implementation to profile",
     )
     args = parser.parse_args()

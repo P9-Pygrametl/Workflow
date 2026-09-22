@@ -13,7 +13,6 @@ from benchmark_config import (
 from benchmark_results import add_profile_data, print_summary, save_results
 from benchmark_runtime import (
     generate_sources,
-    implementation_order,
     reset_latency_toxics,
     run_clean_benchmark,
     run_profile,
@@ -64,38 +63,39 @@ def run_workload(pages, source_rtt_latency, results_by_key):
 
 def run_clean_benchmarks(pages, source_rtt_ms, results_by_key):
     print("=== Clean benchmark runs ===")
+    (name, script), = IMPLEMENTATIONS.items()
+
     for run_number in range(1, REPEATS + 1):
         print(f"\nClean run {run_number}/{REPEATS}")
-        for name, script in implementation_order(run_number):
-            print(f"Benchmarking {name}...")
-            result = run_clean_benchmark(name, script, source_rtt_ms)
-            result.update(
-                {
-                    "workload_pages": pages,
-                    "run": run_number,
-                    "source_rtt_ms": source_rtt_ms,
-                    "timestamp": time.asctime(),
-                }
-            )
-            results_by_key[(pages, source_rtt_ms, run_number, name)] = result
-            print(f"  Wall: {result['clean_wall_seconds']:.2f}s")
-            print(f"  Python CPU: {result['python_cpu_seconds']:.2f}s")
+        print(f"Benchmarking {name}...")
+        result = run_clean_benchmark(name, script, source_rtt_ms)
+        result.update(
+            {
+                "workload_pages": pages,
+                "run": run_number,
+                "source_rtt_ms": source_rtt_ms,
+                "timestamp": time.asctime(),
+            }
+        )
+        results_by_key[(pages, source_rtt_ms, run_number, name)] = result
+        print(f"  Wall: {result['clean_wall_seconds']:.2f}s")
+        print(f"  Python CPU: {result['python_cpu_seconds']:.2f}s")
 
 
 def run_profiled_benchmarks(pages, source_rtt_ms, results_by_key):
     print("\n=== Phase profiling runs ===")
+    name, = IMPLEMENTATIONS
+
     for run_number in range(1, REPEATS + 1):
         print(f"\nProfile run {run_number}/{REPEATS}")
-        for name, _ in implementation_order(run_number):
-            print(f"Profiling {name}...")
-            profile = run_profile(name, source_rtt_ms)
-            result = results_by_key[(pages, source_rtt_ms, run_number, name)]
-            add_profile_data(result, profile)
-            print(
-                f"  Profiled wall: "
-                f"{profile['total_profiled_wall_seconds']:.2f}s"
-            )
-
+        print(f"Profiling {name}...")
+        profile = run_profile(name, source_rtt_ms)
+        result = results_by_key[(pages, source_rtt_ms, run_number, name)]
+        add_profile_data(result, profile)
+        print(
+            f"  Profiled wall: "
+            f"{profile['total_profiled_wall_seconds']:.2f}s"
+        )
 
 def ordered_results(results_by_key):
     return [

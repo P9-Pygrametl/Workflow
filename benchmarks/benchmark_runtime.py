@@ -6,9 +6,10 @@ import time
 import urllib.error
 import urllib.request
 
+from urllib.parse import urlparse
+
 from benchmark_config import (
     DW_DATABASE,
-    IMPLEMENTATIONS,
     LATENCY_DOWN_TOXIC,
     LATENCY_UP_TOXIC,
     PROFILE_SCRIPT,
@@ -105,26 +106,51 @@ def configure_toxiproxy(rtt_ms):
         )
 
 
-def prepare_implementation(implementation, rtt_ms):
-    if implementation != "database":
+def _extract_host_port(address):
+    if address is None:
+        return None, None
+
+    if "://" in address:
+        parsed = urlparse(address)
+        return parsed.hostname, parsed.port
+
+    params = dict(
+        token.partition("=")[::2]
+        for token in address.split()
+        if "=" in token
+    )
+    port = params.get("port")
+    return params.get("host"), int(port) if port else None
+
+
+def using_toxiproxy():
+    if not (TOXIPROXY_API and TOXIPROXY_PROXY):
+        return False
+
+    try:
+        response = toxiproxy_request("GET", f"/proxies/{TOXIPROXY_PROXY}")
+    except (RuntimeError, OSError):
+        return False
+
+    proxy_info = json.loads(response)
+    _, proxy_port = _extract_host_port("//" + proxy_info["listen"])
+    _, db_port = _extract_host_port(DW_DATABASE)
+
+    return db_port is not None and db_port == proxy_port
+
+
+def prepare_implementation(rtt_ms):
+    if not using_toxiproxy():
+        if rtt_ms != 0:
+            raise RuntimeError(
+                f"Cannot apply {rtt_ms} ms latency because DW_DATABASE is "
+                "not currently connected through the Toxiproxy proxy."
+            )
         return
 
     if rtt_ms == 0:
-        if TOXIPROXY_API and TOXIPROXY_PROXY:
-            configure_toxiproxy(0)
+        configure_toxiproxy(0)
         return
-
-    if not TOXIPROXY_API:
-        raise RuntimeError(
-            f"Cannot apply {rtt_ms} ms latency because "
-            "TOXIPROXY_API is not configured in .env."
-        )
-
-    if not TOXIPROXY_PROXY:
-        raise RuntimeError(
-            f"Cannot apply {rtt_ms} ms latency because "
-            "TOXIPROXY_PROXY is not configured in .env"
-        )
 
     print(f"  Configuring Toxiproxy for {rtt_ms} ms RTT...")
     configure_toxiproxy(rtt_ms)
@@ -159,17 +185,8 @@ def child_cpu_time():
     return usage.ru_utime + usage.ru_stime
 
 
-def implementation_order(run_number):
-    implementations = list(IMPLEMENTATIONS.items())
-
-    if len(implementations) > 1 and run_number % 2 == 0:
-        implementations.reverse()
-
-    return implementations
-
-
 def run_clean_benchmark(name, script, rtt_ms):
-    prepare_implementation(name, rtt_ms)
+    prepare_implementation(rtt_ms)
     print(f"  Resetting warehouse for {name}...")
     reset_warehouse()
 
@@ -196,7 +213,7 @@ def run_clean_benchmark(name, script, rtt_ms):
 
 
 def run_profile(implementation, rtt_ms):
-    prepare_implementation(implementation, rtt_ms)
+    prepare_implementation(rtt_ms)
     completed = subprocess.run(
         [sys.executable, str(PROFILE_SCRIPT), implementation],
         cwd=ROOT,

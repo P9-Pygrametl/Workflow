@@ -88,18 +88,18 @@ def print_summary(results):
 
         for source_rtt_ms in latencies:
             print(f"\nWorkload: pages={pages}, RTT latency={source_rtt_ms} ms")
-            for name in IMPLEMENTATIONS:
-                matching = [
-                    result
-                    for result in results
-                    if result["workload_pages"] == pages
-                    and result["source_rtt_ms"] == source_rtt_ms
-                    and result["implementation"] == name
-                ]
-                print_implementation_summary(name, matching)
+            name, = IMPLEMENTATIONS
+            matching = [
+                result
+                for result in results
+                if result["workload_pages"] == pages
+                and result["source_rtt_ms"] == source_rtt_ms
+                and result["implementation"] == name
+            ]
+            print_benchmark_summary(name, matching)
 
 
-def print_implementation_summary(name, results):
+def print_benchmark_summary(name, results):
     wall_times = [result["clean_wall_seconds"] for result in results]
     cpu_times = [result["python_cpu_seconds"] for result in results]
     waiting_times = [result["waiting_seconds"] for result in results]

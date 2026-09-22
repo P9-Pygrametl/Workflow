@@ -4,11 +4,7 @@ import time
 
 from benchmark_config import DW_DATABASE, PHASES, ROOT
 
-
-IMPLEMENTATIONS = {
-    "database": "cpygrametl1_db",
-}
-
+MODULE_NAME = "cpygrametl1_db"
 
 def reset_warehouse():
     subprocess.run(
@@ -82,7 +78,7 @@ def create_timings():
     return timings, {name: 0.0 for name in timings}
 
 
-def instrument_module(module, implementation, timings, timings_cpu):
+def instrument_module(module, timings, timings_cpu):
     module.inputdata = TimedIterable(module.inputdata, timings, timings_cpu)
     for function_name in ("extractdomaininfo", "extractserverinfo"):
         setattr(
@@ -125,18 +121,17 @@ def instrument_module(module, implementation, timings, timings_cpu):
         timings,
         timings_cpu,
     )
-    if implementation == "database":
-        for attribute in ("sourceconn1", "sourceconn2"):
-            setattr(
-                module,
-                attribute,
-                TimedProxy(
-                    module.__dict__[attribute],
-                    {"close": "connection_close"},
-                    timings,
-                    timings_cpu,
-                ),
-            )
+    for attribute in ("sourceconn1", "sourceconn2"):
+        setattr(
+            module,
+            attribute,
+            TimedProxy(
+                module.__dict__[attribute],
+                {"close": "connection_close"},
+                timings,
+                timings_cpu,
+            ),
+        )
 
 
 def profile(implementation):
@@ -144,15 +139,14 @@ def profile(implementation):
     print(f"Resetting warehouse for {implementation}...")
     reset_warehouse()
 
-    module_name = IMPLEMENTATIONS[implementation]
-    print(f"Importing {module_name}...")
+    print(f"Importing {MODULE_NAME}...")
     wall_start = time.perf_counter()
     cpu_start = time.process_time()
-    module = importlib.import_module(module_name)
+    module = importlib.import_module(MODULE_NAME)
     timings["initialisation"] = time.perf_counter() - wall_start
     timings_cpu["initialisation"] = time.process_time() - cpu_start
 
-    instrument_module(module, implementation, timings, timings_cpu)
+    instrument_module(module, timings, timings_cpu)
     print(f"Profiling {implementation} ETL...")
     wall_start = time.perf_counter()
     cpu_start = time.process_time()
