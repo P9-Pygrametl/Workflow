@@ -1,8 +1,8 @@
+# benchmark_config.py
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-
 
 ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
@@ -42,22 +42,3 @@ RESULTS_DB = ROOT / "data" / "benchmark_results.db"
 PROFILE_SCRIPT = ROOT / "benchmarks" / "profile_etl.py"
 LATENCY_UP_TOXIC = "latency-up"
 LATENCY_DOWN_TOXIC = "latency-down"
-
-
-def validate_sizes(sizes):
-    invalid_sizes = [size for size in sizes if size < 1]
-
-    if invalid_sizes:
-        raise ValueError(
-            f"All sizes must be positive integers, got {invalid_sizes!r}"
-        )
-
-
-def validate_latency(latencies):
-    invalid_latencies = [latency for latency in latencies if latency < 0]
-
-    if invalid_latencies:
-        raise ValueError(
-            "Latency values must be non-negative integers, "
-            f"got {invalid_latencies!r}"
-        )

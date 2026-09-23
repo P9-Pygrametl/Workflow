@@ -1,19 +1,11 @@
 import json
-import resource
-import subprocess
 import sys
-import time
 import urllib.error
 import urllib.request
 
-from urllib.parse import urlparse
-
 from benchmark_config import (
-    DW_DATABASE,
     LATENCY_DOWN_TOXIC,
     LATENCY_UP_TOXIC,
-    PROFILE_SCRIPT,
-    ROOT,
     TOXIPROXY_API,
     TOXIPROXY_PROXY,
 )
@@ -106,11 +98,14 @@ def configure_toxiproxy(rtt_ms):
         )
 
 
-def prepare_implementation(rtt_ms):
-    if not (TOXIPROXY_API and TOXIPROXY_PROXY):
+def apply_network_latency(rtt_ms):
+    if not TOXIPROXY_API:
         raise RuntimeError(
-            f"Cannot apply {rtt_ms} ms latency because DW_DATABASE is "
-            "not currently connected through the Toxiproxy proxy."
+            f"Cannot apply {rtt_ms} ms latency because TOXIPROXY_API is not set."
+        )
+    if not TOXIPROXY_PROXY:
+        raise RuntimeError(
+            f"Cannot apply {rtt_ms} ms latency because TOXIPROXY_PROXY is not set."
         )
     if rtt_ms == 0:
         configure_toxiproxy(0)
@@ -118,84 +113,3 @@ def prepare_implementation(rtt_ms):
 
     print(f"  Configuring Toxiproxy for {rtt_ms} ms RTT...")
     configure_toxiproxy(rtt_ms)
-
-
-def run_generator(script, pages):
-    subprocess.run(
-        [sys.executable, str(ROOT / script), "--pages", str(pages)],
-        check=True,
-        cwd=ROOT,
-        stdout=subprocess.DEVNULL,
-    )
-
-
-def generate_sources(pages):
-    reset_latency_toxics(strict=True)
-    print(f"Generating source data for pages={pages}...")
-    run_generator("datagenerator/datagenerator_db.py", pages)
-
-
-def reset_warehouse():
-    subprocess.run(
-        ["psql", DW_DATABASE, "-f", str(ROOT / "starschema.sql")],
-        check=True,
-        cwd=ROOT,
-        stdout=subprocess.DEVNULL,
-    )
-
-
-def child_cpu_time():
-    usage = resource.getrusage(resource.RUSAGE_CHILDREN)
-    return usage.ru_utime + usage.ru_stime
-
-
-def run_clean_benchmark(name, script, rtt_ms):
-    prepare_implementation(rtt_ms)
-    print(f"  Resetting warehouse for {name}...")
-    reset_warehouse()
-
-    cpu_start = child_cpu_time()
-    wall_start = time.perf_counter()
-    subprocess.run(
-        [sys.executable, str(ROOT / script)],
-        check=True,
-        cwd=ROOT,
-        stdout=subprocess.DEVNULL,
-    )
-    wall_time = time.perf_counter() - wall_start
-    cpu_time = child_cpu_time() - cpu_start
-    waiting_time = max(0.0, wall_time - cpu_time)
-
-    return {
-        "implementation": name,
-        "source_rtt_ms": rtt_ms,
-        "clean_wall_seconds": wall_time,
-        "python_cpu_seconds": cpu_time,
-        "waiting_seconds": waiting_time,
-        "cpu_percent": cpu_time / wall_time * 100 if wall_time else 0.0,
-    }
-
-
-def run_profile(implementation, rtt_ms):
-    prepare_implementation(rtt_ms)
-    completed = subprocess.run(
-        [sys.executable, str(PROFILE_SCRIPT), implementation],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
-
-    if completed.returncode != 0:
-        print(completed.stdout)
-        print(completed.stderr, file=sys.stderr)
-        raise subprocess.CalledProcessError(
-            completed.returncode,
-            completed.args,
-        )
-
-    prefix = "PROFILE_RESULT="
-    for line in completed.stdout.splitlines():
-        if line.startswith(prefix):
-            return json.loads(line[len(prefix):])
-
-    raise RuntimeError("profile_etl.py did not produce a PROFILE_RESULT line")

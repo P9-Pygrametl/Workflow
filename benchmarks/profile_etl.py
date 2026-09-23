@@ -3,16 +3,12 @@ import os
 import sys
 from pathlib import Path
 
+from etl_instrumentation import profile
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# ETL scripts use relative paths for generated source files.
 os.chdir(ROOT)
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from profile_runtime import profile  # noqa: E402
-
 
 def main():
     import argparse

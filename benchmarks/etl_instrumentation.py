@@ -1,76 +1,17 @@
+# Note: Instrumentation is apparently a well-known term in programming meaning
+# something along the lines of "adding code to a program whose purpose is to 
+# observe what the program is doing while it runs, without changing what the
+# program actually computes".
+
 import importlib
-import subprocess
 import time
 
-from benchmark_config import DW_DATABASE, PHASES, ROOT
+from benchmark_config import PHASES
+from benchmark_results import print_profile_summary
+from timing_wrappers import TimedIterable, TimedProxy, timed_function
+from warehouse import reset_warehouse
 
 MODULE_NAME = "cpygrametl1_db"
-
-def reset_warehouse():
-    subprocess.run(
-        ["psql", DW_DATABASE, "-f", str(ROOT / "starschema.sql")],
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
-
-
-def timed_function(function, timing_name, timings, timings_cpu):
-    def wrapper(*args, **kwargs):
-        wall_start = time.perf_counter()
-        cpu_start = time.process_time()
-        try:
-            return function(*args, **kwargs)
-        finally:
-            timings[timing_name] += time.perf_counter() - wall_start
-            timings_cpu[timing_name] += time.process_time() - cpu_start
-
-    return wrapper
-
-
-class TimedIterable:
-    def __init__(self, source, timings, timings_cpu):
-        self.source = source
-        self.timings = timings
-        self.timings_cpu = timings_cpu
-        self.rows = 0
-
-    def __iter__(self):
-        iterator = iter(self.source)
-        while True:
-            wall_start = time.perf_counter()
-            cpu_start = time.process_time()
-            try:
-                row = next(iterator)
-            except StopIteration:
-                self._record("extraction_merge", wall_start, cpu_start)
-                return
-
-            self._record("extraction_merge", wall_start, cpu_start)
-            self.rows += 1
-            yield row
-
-    def _record(self, timing_name, wall_start, cpu_start):
-        self.timings[timing_name] += time.perf_counter() - wall_start
-        self.timings_cpu[timing_name] += time.process_time() - cpu_start
-
-
-class TimedProxy:
-    def __init__(self, obj, methods, timings, timings_cpu):
-        self._obj = obj
-        for method_name, timing_name in methods.items():
-            setattr(
-                self,
-                method_name,
-                timed_function(
-                    getattr(obj, method_name),
-                    timing_name,
-                    timings,
-                    timings_cpu,
-                ),
-            )
-
-    def __getattr__(self, name):
-        return getattr(self._obj, name)
 
 
 def create_timings():
@@ -78,7 +19,7 @@ def create_timings():
     return timings, {name: 0.0 for name in timings}
 
 
-def instrument_module(module, timings, timings_cpu):
+def measure_etl(module, timings, timings_cpu):
     module.inputdata = TimedIterable(module.inputdata, timings, timings_cpu)
     for function_name in ("extractdomaininfo", "extractserverinfo"):
         setattr(
@@ -146,7 +87,7 @@ def profile(implementation):
     timings["initialisation"] = time.perf_counter() - wall_start
     timings_cpu["initialisation"] = time.process_time() - cpu_start
 
-    instrument_module(module, timings, timings_cpu)
+    measure_etl(module, timings, timings_cpu)
     print(f"Profiling {implementation} ETL...")
     wall_start = time.perf_counter()
     cpu_start = time.process_time()
@@ -171,7 +112,7 @@ def profile(implementation):
         "timings_cpu": timings_cpu,
         "timings_waiting": timings_waiting,
     }
-    print_profile_table(
+    print_profile_summary(
         timings,
         timings_cpu,
         timings_waiting,
@@ -179,30 +120,3 @@ def profile(implementation):
         total_profiled_cpu,
     )
     return result
-
-
-def print_profile_table(timings, timings_cpu, timings_waiting, total_wall, total_cpu):
-    print()
-    print("Phase profile")
-    print("-" * 78)
-    print(
-        f"{'phase':22}{'wall':>10} {'wall%':>7} "
-        f"{'cpu':>10} {'waiting':>10} {'cpu%':>7}"
-    )
-    print("-" * 78)
-    for name, seconds in timings.items():
-        percentage = seconds / total_wall * 100 if total_wall else 0.0
-        cpu_seconds = timings_cpu[name]
-        cpu_percentage = cpu_seconds / total_wall * 100 if total_wall else 0.0
-        print(
-            f"{name:22}{seconds:9.2f}s {percentage:6.2f}% "
-            f"{cpu_seconds:9.2f}s {timings_waiting[name]:9.2f}s "
-            f"{cpu_percentage:6.2f}%"
-        )
-    print("-" * 78)
-    waiting = max(0.0, total_wall - total_cpu)
-    cpu_percentage = total_cpu / total_wall * 100 if total_wall else 0.0
-    print(
-        f"{'total':22}{total_wall:9.2f}s {100.00:6.2f}% "
-        f"{total_cpu:9.2f}s {waiting:9.2f}s {cpu_percentage:6.2f}%"
-    )

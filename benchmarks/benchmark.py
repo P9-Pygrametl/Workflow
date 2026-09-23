@@ -7,16 +7,12 @@ from benchmark_config import (
     IMPLEMENTATIONS,
     REPEATS,
     RESULTS_DB,
-    validate_latency,
-    validate_sizes,
 )
+
 from benchmark_results import add_profile_data, print_summary, save_results
-from benchmark_runtime import (
-    generate_sources,
-    reset_latency_toxics,
-    run_clean_benchmark,
-    run_profile,
-)
+from measure_performance import run_clean_benchmark, run_profile
+from data_generation import generate_sources
+from toxiproxy import reset_latency_toxics
 
 
 def parse_args():
@@ -51,19 +47,39 @@ def parse_args():
     return parser.parse_args()
 
 
+def validate_sizes(sizes):
+    invalid_sizes = [size for size in sizes if size < 1]
+
+    if invalid_sizes:
+        raise ValueError(
+            f"All sizes must be positive integers, got {invalid_sizes!r}"
+        )
+
+
+def validate_latency(latencies):
+    invalid_latencies = [latency for latency in latencies if latency < 0]
+
+    if invalid_latencies:
+        raise ValueError(
+            "Latency values must be non-negative integers, "
+            f"got {invalid_latencies!r}"
+        )
+
+
 def run_workload(pages, source_rtt_latency, results_by_key):
     print(f"\n=== Workload size: {pages} pages ===")
     generate_sources(pages)
 
+    (name, script), = IMPLEMENTATIONS.items()
+
     for source_rtt_ms in source_rtt_latency:
         print(f"\n=== Source RTT: {source_rtt_ms} ms ===")
-        run_clean_benchmarks(pages, source_rtt_ms, results_by_key)
-        run_profiled_benchmarks(pages, source_rtt_ms, results_by_key)
+        run_clean_benchmarks(name, script, pages, source_rtt_ms, results_by_key)
+        run_profiled_benchmarks(name, pages, source_rtt_ms, results_by_key)
 
 
-def run_clean_benchmarks(pages, source_rtt_ms, results_by_key):
+def run_clean_benchmarks(name, script, pages, source_rtt_ms, results_by_key):
     print("=== Clean benchmark runs ===")
-    (name, script), = IMPLEMENTATIONS.items()
 
     for run_number in range(1, REPEATS + 1):
         print(f"\nClean run {run_number}/{REPEATS}")
@@ -82,9 +98,8 @@ def run_clean_benchmarks(pages, source_rtt_ms, results_by_key):
         print(f"  Python CPU: {result['python_cpu_seconds']:.2f}s")
 
 
-def run_profiled_benchmarks(pages, source_rtt_ms, results_by_key):
+def run_profiled_benchmarks(name, pages, source_rtt_ms, results_by_key):
     print("\n=== Phase profiling runs ===")
-    name, = IMPLEMENTATIONS
 
     for run_number in range(1, REPEATS + 1):
         print(f"\nProfile run {run_number}/{REPEATS}")
@@ -96,6 +111,7 @@ def run_profiled_benchmarks(pages, source_rtt_ms, results_by_key):
             f"  Profiled wall: "
             f"{profile['total_profiled_wall_seconds']:.2f}s"
         )
+
 
 def ordered_results(results_by_key):
     return [
