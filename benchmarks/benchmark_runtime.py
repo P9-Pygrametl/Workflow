@@ -106,48 +106,12 @@ def configure_toxiproxy(rtt_ms):
         )
 
 
-def _extract_host_port(address):
-    if address is None:
-        return None, None
-
-    if "://" in address:
-        parsed = urlparse(address)
-        return parsed.hostname, parsed.port
-
-    params = dict(
-        token.partition("=")[::2]
-        for token in address.split()
-        if "=" in token
-    )
-    port = params.get("port")
-    return params.get("host"), int(port) if port else None
-
-
-def using_toxiproxy():
-    if not (TOXIPROXY_API and TOXIPROXY_PROXY):
-        return False
-
-    try:
-        response = toxiproxy_request("GET", f"/proxies/{TOXIPROXY_PROXY}")
-    except (RuntimeError, OSError):
-        return False
-
-    proxy_info = json.loads(response)
-    _, proxy_port = _extract_host_port("//" + proxy_info["listen"])
-    _, db_port = _extract_host_port(DW_DATABASE)
-
-    return db_port is not None and db_port == proxy_port
-
-
 def prepare_implementation(rtt_ms):
-    if not using_toxiproxy():
-        if rtt_ms != 0:
-            raise RuntimeError(
-                f"Cannot apply {rtt_ms} ms latency because DW_DATABASE is "
-                "not currently connected through the Toxiproxy proxy."
-            )
-        return
-
+    if not (TOXIPROXY_API and TOXIPROXY_PROXY):
+        raise RuntimeError(
+            f"Cannot apply {rtt_ms} ms latency because DW_DATABASE is "
+            "not currently connected through the Toxiproxy proxy."
+        )
     if rtt_ms == 0:
         configure_toxiproxy(0)
         return
