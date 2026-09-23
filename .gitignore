@@ -1,6 +1,7 @@
 .env
 /data
 .venv/
+.venv-t/
 __pycache__/
 *.py[cod]
 DownloadLog.csv

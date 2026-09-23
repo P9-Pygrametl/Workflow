@@ -1,3 +1,2 @@
 psycopg[c]==3.3.5
-pygrametl==2.9
 python-dotenv==1.2.3
