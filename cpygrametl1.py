@@ -1,6 +1,6 @@
 import datetime
 import time
-import psycopg2
+import psycopg
 import pygrametl
 import os
 from dotenv import load_dotenv, dotenv_values 
@@ -11,7 +11,7 @@ from pygrametl.datasources import CSVSource, MergeJoiningSource
 from pygrametl.tables import CachedDimension, SnowflakedDimension,\
     SlowlyChangingDimension, BulkFactTable
 
-pgconn = psycopg2.connect(
+pgconn = psycopg.connect(
     host="localhost",
     dbname=os.getenv("DW_DATABASE"),
     user=os.getenv("USERNAME"),
@@ -22,10 +22,14 @@ connection.execute('set search_path to pygrametlexa')
 
 # Methods
 def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filehandle):
-    cursor = pgconn.cursor()
-    cursor.copy_from(file=filehandle, table=name, sep=fieldsep,
-                     null=str(nullval), columns=atts)
-
+    sql = (
+        f"COPY {name}({', '.join(atts)}) FROM STDIN "
+        f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
+    )
+    raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
+    with pgconn.cursor().copy(sql) as copy:
+        for chunk in iter(lambda: raw.read(1 << 20), b""):
+            copy.write(chunk)
 def datehandling(row, namemapping):
     # This method is called from ensure(row) when the lookup of a date fails.
     # We have to calculate all date related fields and add them to the row.

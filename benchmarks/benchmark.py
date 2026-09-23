@@ -526,6 +526,7 @@ def add_profile_data(result, profile):
 
 
 def save_results(results):
+    RESULTS_DB.parent.mkdir(parents=True, exist_ok=True)
     columns = [
         ("workload_pages", "INTEGER"),
         ("implementation", "TEXT"),
@@ -672,6 +673,7 @@ def print_summary(results):
 
 
 def main():
+    print("GIL enabled:", sys._is_gil_enabled()) 
     args = parse_args()
     validate_sizes(args.page_sizes)
     validate_latency(args.source_rtt_latency)

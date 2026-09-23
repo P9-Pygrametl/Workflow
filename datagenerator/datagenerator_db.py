@@ -3,9 +3,8 @@ import os
 import random
 from itertools import islice
 
-import psycopg2
+import psycopg
 from dotenv import load_dotenv
-from psycopg2.extras import execute_values
 
 import datagenerator
 
@@ -141,24 +140,11 @@ def generate_test_rows(download_rows):
 
 def insert_test_rows(connection, rows, batch_size=10000):
     with connection.cursor() as cursor:
-        while True:
-            batch = list(islice(rows, batch_size))
-
-            if not batch:
-                break
-
-            execute_values(
-                cursor,
-                """
-                INSERT INTO testresults (
-                    localfile,
-                    test,
-                    errors
-                )
-                VALUES %s
-                """,
-                batch,
-            )
+        with cursor.copy(
+            "COPY testresults (localfile, test, errors) FROM STDIN"
+        ) as copy:
+            for row in rows:
+                copy.write_row(row)
 
     connection.commit()
 
@@ -208,7 +194,7 @@ def main():
             f"SOURCE_PORT must be an integer, got {source_port_value!r}"
         )
 
-    connection = psycopg2.connect(
+    connection = psycopg.connect(
         host=source_host,
         port=source_port,
         dbname=source_database,

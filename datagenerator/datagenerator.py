@@ -33,9 +33,9 @@ def read_param(name, default):
     return getattr(params, name, default)
 
 
-toplevels = read_param("toplevels", 15)
-domains = read_param("domains", 50)
-pages = read_param("pages", 100)
+toplevels = read_param("toplevels", 5)
+domains = read_param("domains", 5)
+pages = read_param("pages", 10)
 months = read_param("months", 12)
 changeprob = read_param("changeprob", 50)
 startyear = read_param("startyear", 2008)
