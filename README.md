@@ -5,6 +5,7 @@
 - [Running the ETL](#running-the-etl)
 - [Benchmarking](#benchmarking)
 - [Network-latency benchmarking (Docker + Toxiproxy)](#network-latency-benchmarking-docker--toxiproxy)
+- [Docker](#docker)
 - [Legacy setups](#legacy-setups)
 
 ## Setup
@@ -17,8 +18,6 @@ The `setup.sh` script automates the installation of PostgreSQL and Python depend
 ```bash
 ./setup.sh
 ```
-
-> **Important:** The setup script gives the chosen Postgres user superuser permissions.
 
 ## Running the ETL
 
@@ -48,13 +47,8 @@ python3 benchmarks/benchmark.py
 Every page size is run at every latency, for example:
 
 ```bash
-SOURCE_PORT=15432 \
 python3 benchmarks/benchmark.py --page-sizes 1 2 --source-rtt-latency 0 50 100
 ```
-
-> **Important:** `--source-rtt-latency` only has an effect when
-> `SOURCE_PORT=15432`. On any other port the ETL bypasses the proxy and
-> the latency is never applied.
 
 For each RTT, the script splits the delay evenly between the upstream and
 downstream directions. It clears any leftover latency before generating data
@@ -90,38 +84,24 @@ localhost:55432  -> Docker PostgreSQL (direct)
 localhost:15432  -> Toxiproxy -> Docker PostgreSQL
 ```
 
-The toxiproxy-init container automatically configures the proxy during startup.
-Use the 0 ms run through Toxiproxy as the baseline for latency experiments,
-not local PostgreSQL on port 5432.
+The .env defaults to port 5432.
+With the `--source-rtt-latency` flag, the benchmark is automatically routed through Toxiproxy.
+
+> **Important:** Use `--source-rtt-latency 0` as the baseline for latency experiments, not local PostgreSQL on port 5432.
+
+## Docker
+
+The Docker containers are controlled using `docker-compose.network-benchmark.yml`.
 
 ### Start the containers
-
-Docker must be installed and running.
 
 ```bash
 docker compose -f docker-compose.network-benchmark.yml up -d
 ```
 
-### Run the benchmark
-
-**Docker PostgreSQL directly** (no Toxiproxy):
-
-```bash
-SOURCE_PORT=55432 \
-python3 benchmarks/benchmark.py
-```
-
-**Through Toxiproxy**:
-
-```bash
-SOURCE_PORT=15432 \
-python3 benchmarks/benchmark.py
-```
-
 ### Stop the containers
 
-The generated source data lives in a Docker volume and survives stopping the container. To
-delete the volume as well:
+The generated source data lives in a Docker volume and survives stopping the container. To delete the volume as well:
 
 ```bash
 docker compose -f docker-compose.network-benchmark.yml down -v

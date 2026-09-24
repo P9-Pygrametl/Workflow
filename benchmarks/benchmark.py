@@ -244,13 +244,13 @@ def prepare_implementation(implementation, rtt_ms):
 
     if not TOXIPROXY_API:
         raise RuntimeError(
-            "Cannot apply {rtt_ms} ms latency because "
+            f"Cannot apply {rtt_ms} ms latency because "
             "TOXIPROXY_API is not configured in .env."
         )
 
     if not TOXIPROXY_PROXY:
         raise RuntimeError(
-            "Cannot apply {rtt_ms} ms latency because "
+            f"Cannot apply {rtt_ms} ms latency because "
             "TOXIPROXY_PROXY is not configured in .env"
         )
 
@@ -321,6 +321,22 @@ def validate_latency(latencies):
             f"got {invalid_latencies!r}"
         )
 
+    return "--source-rtt-latency" in sys.argv
+
+def setup_toxiproxy_routing():
+    try:
+        response = toxiproxy_request("GET", f"/proxies/{TOXIPROXY_PROXY}")
+        data = json.loads(response)
+        proxy_port = data.get("listen", "").split(":")[-1]
+        
+        print(f"Auto-routing through Toxiproxy on port {proxy_port}")
+        os.environ["SOURCE_PORT"] = proxy_port
+        os.environ["SOURCE_HOST"] = "127.0.0.1"
+    except Exception as e:
+        sys.exit(
+            f"Error configuring routing: {e}\n"
+            "Ensure the Docker containers are running (docker compose up -d)."
+        )
 
 def run_generator(script, pages):
     command = [
@@ -678,7 +694,10 @@ def print_summary(results):
 def main():
     args = parse_args()
     validate_sizes(args.page_sizes)
-    validate_latency(args.source_rtt_latency)
+
+    if validate_latency(args.source_rtt_latency):
+        setup_toxiproxy_routing()
+    
     try:
         results_by_key = {}
 
