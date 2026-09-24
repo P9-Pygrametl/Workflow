@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
 DW_DATABASE = os.getenv("DW_DATABASE")
+DB_USERNAME = os.getenv("USERNAME")
 
 TOXIPROXY_API = os.getenv("TOXIPROXY_API")
 TOXIPROXY_PROXY = os.getenv("TOXIPROXY_PROXY")
@@ -356,6 +357,9 @@ def reset_warehouse():
     subprocess.run(
         [
             "psql",
+            "-U",
+            DB_USERNAME,
+            "-d",
             DW_DATABASE,
             "-f",
             str(ROOT / "starschema.sql"),
