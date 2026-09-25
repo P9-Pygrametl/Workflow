@@ -7,7 +7,7 @@ echo "Detecting operating system..."
 
 # Set this to the Postgres role that will own pygrametl_source and
 # pygrametl_dw. This value is also written into .env as USERNAME.
-DB_USER="postgres"
+DB_USER="youruser"
 
 if [ "$DB_USER" = "youruser" ]; then
     echo "Please edit setup.sh and set DB_USER to your database username."
@@ -60,10 +60,12 @@ elif [ "$OS" = "Linux" ]; then
 
         if [[ "$ID" == "arch" || "$ID_LIKE" == *"arch"* ]]; then
             echo "Arch Linux detected."
-            yay -S --noconfirm postgresql python
+            yay -S --needed --noconfirm postgresql python
 
-            if [ ! -d "/var/lib/postgres/data/base" ]; then
+            if [ -z "$(sudo ls -A /var/lib/postgres/data 2>/dev/null)" ]; then
                 sudo -u postgres initdb -D /var/lib/postgres/data
+            else
+                echo "PostgreSQL data directory is already initialized. Skipping initdb."
             fi
 
             sudo systemctl enable --now postgresql
@@ -87,7 +89,7 @@ elif [ "$OS" = "Linux" ]; then
         create_role_if_missing "$DB_USER"
         recreate_db pygrametl_source "$DB_USER"
         recreate_db pygrametl_dw "$DB_USER"
-        sudo -u postgres psql -d pygrametl_dw -f starschema.sql
+        psql -U "$DB_USER" -d pygrametl_dw -f starschema.sql
     else
         echo "Cannot determine Linux distribution. Exiting."
         exit 1
