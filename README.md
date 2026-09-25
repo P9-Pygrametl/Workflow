@@ -180,7 +180,7 @@ any number of positive integers to compare different workload sizes in one run.
 Results are written to:
 
 ```text
-benchmarks/benchmark_results.csv
+data/benchmark_results.db
 ```
 
 The benchmark results file is generated locally and should not be committed.
