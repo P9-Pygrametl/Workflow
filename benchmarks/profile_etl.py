@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
 DW_DATABASE = os.getenv("DW_DATABASE")
+DB_USERNAME = os.getenv("USERNAME")
 
 IMPLEMENTATIONS = {
     "csv": "cpygrametl1",
@@ -30,11 +31,15 @@ def reset_warehouse():
     subprocess.run(
         [
             "psql",
+            "-U",
+            DB_USERNAME,
+            "-d",
             DW_DATABASE,
             "-f",
             str(ROOT / "starschema.sql"),
         ],
         check=True,
+        cwd=ROOT,
         stdout=subprocess.DEVNULL,
     )
 

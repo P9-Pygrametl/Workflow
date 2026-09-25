@@ -24,6 +24,21 @@ services:
       source-db:
         condition: service_healthy
 
+  toxiproxy-init:
+    image: curlimages/curl:8.11.0
+    depends_on:
+      toxiproxy:
+        condition: service_started
+    restart: "no"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        until curl -sf http://toxiproxy:8474/proxies >/dev/null; do sleep 0.5; done
+        curl -sf http://toxiproxy:8474/proxies/${TOXIPROXY_PROXY} >/dev/null 2>&1 || \
+        curl -sf -X POST http://toxiproxy:8474/proxies \
+          -H "Content-Type: application/json" \
+          -d "{\"name\":\"${TOXIPROXY_PROXY}\",\"listen\":\"0.0.0.0:15432\",\"upstream\":\"source-db:5432\",\"enabled\":true}"
+
   sqlite-ui:
     image: coleifer/sqlite-web
     user: "${UID:-1000}:${GID:-1000}"
