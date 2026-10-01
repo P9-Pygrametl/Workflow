@@ -7,7 +7,7 @@ import psycopg2
 from dotenv import load_dotenv
 from psycopg2.extras import execute_values
 
-import datagenerator
+from datagenerator import datagenerator
 
 
 load_dotenv()
@@ -170,31 +170,14 @@ def clear_source_tables(connection):
     connection.commit()
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description=(
-            "Generate PostgreSQL source data for the ETL benchmark."
-        )
-    )
-
-    parser.add_argument(
-        "--pages",
-        type=int,
-        help=(
-            "Number of pages per domain. "
-            "Defaults to the module configuration."
-        ),
-    )
-
-    args = parser.parse_args()
-
-    if args.pages is not None:
-        if args.pages < 1:
+def generate(pages=None):
+    if pages is not None:
+        if pages < 1:
             raise ValueError(
-                f"--pages must be a positive integer, got {args.pages}"
+                f"pages must be a positive integer, got {pages}"
             )
 
-        datagenerator.pages = args.pages
+        datagenerator.pages = pages
 
     username = os.getenv("USERNAME")
     source_database = os.getenv("SOURCE_DATABASE", "pygrametl_source")
@@ -215,29 +198,52 @@ def main():
         user=username,
     )
 
-    print("Connected successfully")
+    try:
+        print("Connected successfully")
 
-    create_source_tables(connection)
-    clear_source_tables(connection)
+        create_source_tables(connection)
+        clear_source_tables(connection)
 
-    print("Generating download data...")
+        print("Generating download data...")
 
-    download_rows = generate_download_rows()
-    insert_download_rows(connection, download_rows)
+        download_rows = generate_download_rows()
+        insert_download_rows(connection, download_rows)
 
-    print("Download rows inserted successfully")
+        print("Download rows inserted successfully")
 
-    print("Generating test result data...")
+        print("Generating test result data...")
 
-    # Fresh generator because the previous one was consumed
-    download_rows = generate_download_rows()
-    test_rows = generate_test_rows(download_rows)
+        # Fresh generator because the previous one was consumed.
+        download_rows = generate_download_rows()
+        test_rows = generate_test_rows(download_rows)
 
-    insert_test_rows(connection, test_rows)
+        insert_test_rows(connection, test_rows)
 
-    print("Test result rows inserted successfully")
+        print("Test result rows inserted successfully")
 
-    connection.close()
+    finally:
+        connection.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate PostgreSQL source data for the ETL benchmark."
+        )
+    )
+
+    parser.add_argument(
+        "--pages",
+        type=int,
+        help=(
+            "Number of pages per domain. "
+            "Defaults to the module configuration."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    generate(args.pages)
 
 
 if __name__ == "__main__":

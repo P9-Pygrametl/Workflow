@@ -1,42 +1,13 @@
-import argparse
-import importlib
-import json
-import os
-import subprocess
-import sys
 import time
-from pathlib import Path
 
-from dotenv import load_dotenv
+from cpygrametl1_db import (
+    create_etl,
+    extractdomaininfo,
+    extractserverinfo,
+    run_etl,
+)
 
-
-ROOT = Path(__file__).resolve().parent.parent
-
-# The ETL scripts use paths such as "DownloadLog.csv", so run from repo root.
-os.chdir(ROOT)
-sys.path.insert(0, str(ROOT))
-
-load_dotenv(ROOT / ".env")
-
-DW_DATABASE = os.getenv("DW_DATABASE")
-
-IMPLEMENTATIONS = {
-    "csv": "cpygrametl1",
-    "database": "cpygrametl1_db",
-}
-
-
-def reset_warehouse():
-    subprocess.run(
-        [
-            "psql",
-            DW_DATABASE,
-            "-f",
-            str(ROOT / "starschema.sql"),
-        ],
-        check=True,
-        stdout=subprocess.DEVNULL,
-    )
+import pygrametl
 
 
 def timed_function(
@@ -121,7 +92,7 @@ class TimedProxy:
         return getattr(self._obj, name)
 
 
-def profile(implementation):
+def profile():
     timings = {
         "initialisation": 0.0,
         "extraction_merge": 0.0,
@@ -138,18 +109,22 @@ def profile(implementation):
         name: 0.0 for name in timings
     }
 
-    print(f"Resetting warehouse for {implementation}...")
-    reset_warehouse()
+    print("Creating ETL...")
 
-    module_name = IMPLEMENTATIONS[implementation]
-
-    print(f"Importing {module_name}...")
-
-    # Importing the ETL module creates the database connections,
-    # dimensions, fact table and data sources.
     wall_start = time.perf_counter()
     cpu_start = time.process_time()
-    module = importlib.import_module(module_name)
+
+    (
+        connection,
+        sourceconn1,
+        sourceconn2,
+        inputdata,
+        pagedim,
+        datedim,
+        testdim,
+        facttbl,
+    ) = create_etl()
+
     timings["initialisation"] = (
         time.perf_counter() - wall_start
     )
@@ -157,44 +132,35 @@ def profile(implementation):
         time.process_time() - cpu_start
     )
 
-    # Measure extraction + MergeJoiningSource.
     timed_input = TimedIterable(
-        module.inputdata,
+        inputdata,
         timings,
         timings_cpu,
     )
-    module.inputdata = timed_input
 
-    # Measure the explicit transformation functions.
-    module.extractdomaininfo = timed_function(
-        module.extractdomaininfo,
+    timed_extractdomaininfo = timed_function(
+        extractdomaininfo,
         "transformation",
         timings,
         timings_cpu,
     )
 
-    module.extractserverinfo = timed_function(
-        module.extractserverinfo,
+    timed_extractserverinfo = timed_function(
+        extractserverinfo,
         "transformation",
         timings,
         timings_cpu,
     )
 
-    # The ETL script calls pygrametl.getint directly.
-    # Replacing only the module's pygrametl reference means internal
-    # pygrametl code is not affected by this wrapper.
-    module.pygrametl = TimedProxy(
-        module.pygrametl,
-        {
-            "getint": "transformation",
-        },
+    timed_getint = timed_function(
+        pygrametl.getint,
+        "transformation",
         timings,
         timings_cpu,
     )
 
-    # Measure top-level pygrametl table operations.
-    module.pagedim = TimedProxy(
-        module.pagedim,
+    timed_pagedim = TimedProxy(
+        pagedim,
         {
             "scdensure": "page_dimension",
         },
@@ -202,8 +168,8 @@ def profile(implementation):
         timings_cpu,
     )
 
-    module.datedim = TimedProxy(
-        module.datedim,
+    timed_datedim = TimedProxy(
+        datedim,
         {
             "ensure": "date_dimension",
         },
@@ -211,8 +177,8 @@ def profile(implementation):
         timings_cpu,
     )
 
-    module.testdim = TimedProxy(
-        module.testdim,
+    timed_testdim = TimedProxy(
+        testdim,
         {
             "lookup": "test_dimension",
         },
@@ -220,8 +186,8 @@ def profile(implementation):
         timings_cpu,
     )
 
-    module.facttbl = TimedProxy(
-        module.facttbl,
+    timed_facttbl = TimedProxy(
+        facttbl,
         {
             "insert": "fact_insert",
         },
@@ -229,9 +195,8 @@ def profile(implementation):
         timings_cpu,
     )
 
-    # Measure commit and closing of the target connection.
-    module.connection = TimedProxy(
-        module.connection,
+    timed_connection = TimedProxy(
+        connection,
         {
             "commit": "commit",
             "close": "connection_close",
@@ -240,36 +205,46 @@ def profile(implementation):
         timings_cpu,
     )
 
-    # The database-source implementation also closes two source
-    # connections in main().
-    if implementation == "database":
-        module.sourceconn1 = TimedProxy(
-            module.sourceconn1,
-            {
-                "close": "connection_close",
-            },
-            timings,
-            timings_cpu,
-        )
+    timed_sourceconn1 = TimedProxy(
+        sourceconn1,
+        {
+            "close": "connection_close",
+        },
+        timings,
+        timings_cpu,
+    )
 
-        module.sourceconn2 = TimedProxy(
-            module.sourceconn2,
-            {
-                "close": "connection_close",
-            },
-            timings,
-            timings_cpu,
-        )
+    timed_sourceconn2 = TimedProxy(
+        sourceconn2,
+        {
+            "close": "connection_close",
+        },
+        timings,
+        timings_cpu,
+    )
 
-    print(f"Profiling {implementation} ETL...")
+    print("Profiling ETL...")
 
     wall_start = time.perf_counter()
     cpu_start = time.process_time()
-    module.main()
+
+    run_etl(
+        timed_connection,
+        timed_sourceconn1,
+        timed_sourceconn2,
+        timed_input,
+        timed_pagedim,
+        timed_datedim,
+        timed_testdim,
+        timed_facttbl,
+        extract_domain=timed_extractdomaininfo,
+        extract_server=timed_extractserverinfo,
+        get_int=timed_getint,
+    )
+
     main_seconds = time.perf_counter() - wall_start
     main_cpu_seconds = time.process_time() - cpu_start
 
-    # Wrapper installation itself is deliberately excluded.
     total_profiled_wall = (
         timings["initialisation"]
         + main_seconds
@@ -302,7 +277,6 @@ def profile(implementation):
     }
 
     result = {
-        "implementation": implementation,
         "rows": timed_input.rows,
         "total_profiled_wall_seconds": total_profiled_wall,
         "total_profiled_cpu_seconds": total_profiled_cpu,
@@ -359,29 +333,4 @@ def profile(implementation):
         f"{(total_profiled_cpu / total_profiled_wall * 100) if total_profiled_wall > 0 else 0.0:6.2f}%"
     )
 
-    print()
-    print(
-        "PROFILE_RESULT="
-        + json.dumps(
-            result,
-            sort_keys=True,
-        )
-    )
-
-
-def main():
-    parser = argparse.ArgumentParser()
-
-    parser.add_argument(
-        "implementation",
-        choices=IMPLEMENTATIONS,
-        help="ETL implementation to profile",
-    )
-
-    args = parser.parse_args()
-
-    profile(args.implementation)
-
-
-if __name__ == "__main__":
-    main()
+    return result

@@ -5,6 +5,7 @@ import os
 import resource
 import statistics
 import subprocess
+import psycopg2
 import sys
 import time
 import urllib.error
@@ -16,6 +17,13 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# Allow imports from the repository root when running this file directly.
+sys.path.insert(0, str(ROOT))
+
+from benchmarks.profile_etl import profile
+from datagenerator.datagenerator_db import generate
+from cpygrametl1_db import main as run_etl
+
 load_dotenv(ROOT / ".env")
 
 DW_DATABASE = os.getenv("DW_DATABASE")
@@ -23,43 +31,7 @@ DW_DATABASE = os.getenv("DW_DATABASE")
 TOXIPROXY_API = os.getenv("TOXIPROXY_API")
 TOXIPROXY_PROXY = os.getenv("TOXIPROXY_PROXY")
 
-ALL_IMPLEMENTATIONS = {
-    "csv": "cpygrametl1.py",
-    "database": "cpygrametl1_db.py",
-}
-
-BENCHMARK_IMPLEMENTATION = os.getenv(
-    "BENCHMARK_IMPLEMENTATION",
-    "both",
-).lower()
-
-IMPLEMENTATION_ALIASES = {
-    "both": None,
-    "csv": "csv",
-    "db": "database",
-    "database": "database",
-}
-
-if BENCHMARK_IMPLEMENTATION not in IMPLEMENTATION_ALIASES:
-    raise ValueError(
-        "BENCHMARK_IMPLEMENTATION must be one of: "
-        "both, csv, db, database"
-    )
-
-selected_implementation = IMPLEMENTATION_ALIASES[
-    BENCHMARK_IMPLEMENTATION
-]
-
-if selected_implementation is None:
-    IMPLEMENTATIONS = ALL_IMPLEMENTATIONS
-else:
-    IMPLEMENTATIONS = {
-        selected_implementation:
-        ALL_IMPLEMENTATIONS[
-            selected_implementation
-        ]
-    }
-
+BENCHMARK_SCRIPT = "cpygrametl1_db.py"
 
 PHASES = [
     "initialisation",
@@ -92,7 +64,6 @@ DEFAULT_PAGE_SIZES = [100]
 DEFAULT_SOURCE_RTT_MS = [0]
 
 RESULTS_DB = ROOT / "data" / "benchmark_results.db"
-PROFILE_SCRIPT = ROOT / "benchmarks" / "profile_etl.py"
 
 LATENCY_UP_TOXIC = "latency-up"
 LATENCY_DOWN_TOXIC = "latency-down"
@@ -151,7 +122,7 @@ def toxiproxy_request(
             f"at {TOXIPROXY_API}: "
             f"{error.reason}"
         ) from error
-    
+
 
 def reset_latency_toxics(strict=True):
     if not (TOXIPROXY_API and TOXIPROXY_PROXY):
@@ -159,9 +130,9 @@ def reset_latency_toxics(strict=True):
 
     try:
         for toxic in (
-                LATENCY_UP_TOXIC,
-                LATENCY_DOWN_TOXIC,
-            ):
+            LATENCY_UP_TOXIC,
+            LATENCY_DOWN_TOXIC,
+        ):
             toxiproxy_request(
                 "DELETE",
                 (
@@ -173,6 +144,7 @@ def reset_latency_toxics(strict=True):
     except (RuntimeError, OSError) as error:
         if strict:
             raise
+
         print(
             f"Warning: could not reset Toxiproxy latency toxics: {error}\n"
             f"Check manually: curl {TOXIPROXY_API}/proxies/"
@@ -232,10 +204,7 @@ def configure_toxiproxy(rtt_ms):
     )
 
 
-def prepare_implementation(implementation, rtt_ms):
-    if implementation != "database":
-        return
-
+def prepare_benchmark(rtt_ms):
     if rtt_ms == 0:
         if TOXIPROXY_API and TOXIPROXY_PROXY:
             configure_toxiproxy(0)
@@ -243,13 +212,13 @@ def prepare_implementation(implementation, rtt_ms):
 
     if not TOXIPROXY_API:
         raise RuntimeError(
-            "Cannot apply {rtt_ms} ms latency because "
+            f"Cannot apply {rtt_ms} ms latency because "
             "TOXIPROXY_API is not configured in .env."
         )
 
     if not TOXIPROXY_PROXY:
         raise RuntimeError(
-            "Cannot apply {rtt_ms} ms latency because "
+            f"Cannot apply {rtt_ms} ms latency because "
             "TOXIPROXY_PROXY is not configured in .env"
         )
 
@@ -258,15 +227,13 @@ def prepare_implementation(implementation, rtt_ms):
         f"{rtt_ms} ms RTT..."
     )
 
-    configure_toxiproxy(
-        rtt_ms
-    )
+    configure_toxiproxy(rtt_ms)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Benchmark the CSV and PostgreSQL ETL implementations "
+            "Benchmark the PostgreSQL ETL implementation "
             "across one or more workload sizes."
         )
     )
@@ -321,96 +288,37 @@ def validate_latency(latencies):
         )
 
 
-def run_generator(script, pages):
-    command = [
-        sys.executable,
-        str(ROOT / script),
-        "--pages",
-        str(pages),
-    ]
-
-    subprocess.run(
-        command,
-        check=True,
-        cwd=ROOT,
-        stdout=subprocess.DEVNULL,
-    )
-
-
-def generate_sources(pages):
-    reset_latency_toxics(strict=True)
-    print(f"Generating source data for pages={pages}...")
-
-    run_generator(
-        "datagenerator/datagenerator.py",
-        pages,
-    )
-
-    run_generator(
-        "datagenerator/datagenerator_db.py",
-        pages,
-    )
-
-
 def reset_warehouse():
-    subprocess.run(
-        [
-            "psql",
-            DW_DATABASE,
-            "-f",
-            str(ROOT / "starschema.sql"),
-        ],
-        check=True,
-        cwd=ROOT,
-        stdout=subprocess.DEVNULL,
+    schema = (ROOT / "starschema.sql").read_text()
+
+    connection = psycopg2.connect(
+        host="localhost",
+        dbname=DW_DATABASE,
+        user=os.getenv("USERNAME"),
     )
 
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(schema)
 
-def child_cpu_time():
-    usage = resource.getrusage(
-        resource.RUSAGE_CHILDREN
-    )
-
-    return usage.ru_utime + usage.ru_stime
-
-
-def implementation_order(run_number):
-    implementations = list(
-        IMPLEMENTATIONS.items()
-    )
-
-    # Alternate order between runs to reduce systematic
-    # ordering/cache effects when both implementations run.
-    if (
-        len(implementations) > 1
-        and run_number % 2 == 0
-    ):
-        implementations.reverse()
-
-    return implementations
+        connection.commit()
+    finally:
+        connection.close()
 
 
-def run_clean_benchmark(name, script, rtt_ms):
-    prepare_implementation(name, rtt_ms)
+def run_clean_benchmark(rtt_ms):
+    prepare_benchmark(rtt_ms)
 
-    print(f"  Resetting warehouse for {name}...")
+    print("  Resetting warehouse...")
     reset_warehouse()
 
-    cpu_start = child_cpu_time()
+    cpu_start = time.process_time()
     wall_start = time.perf_counter()
 
-    subprocess.run(
-        [
-            sys.executable,
-            str(ROOT / script),
-        ],
-        check=True,
-        cwd=ROOT,
-        stdout=subprocess.DEVNULL,
-    )
+    run_etl()
 
     wall_end = time.perf_counter()
-    cpu_end = child_cpu_time()
+    cpu_end = time.process_time()
 
     wall_time = wall_end - wall_start
     cpu_time = cpu_end - cpu_start
@@ -427,7 +335,6 @@ def run_clean_benchmark(name, script, rtt_ms):
     )
 
     return {
-        "implementation": name,
         "source_rtt_ms": rtt_ms,
         "clean_wall_seconds": wall_time,
         "python_cpu_seconds": cpu_time,
@@ -436,51 +343,8 @@ def run_clean_benchmark(name, script, rtt_ms):
     }
 
 
-def run_profile(implementation, rtt_ms):
-    prepare_implementation(
-        implementation,
-        rtt_ms,
-    )
-
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(PROFILE_SCRIPT),
-            implementation,
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
-
-    if completed.returncode != 0:
-        print(completed.stdout)
-        print(
-            completed.stderr,
-            file=sys.stderr,
-        )
-
-        raise subprocess.CalledProcessError(
-            completed.returncode,
-            completed.args,
-        )
-
-    prefix = "PROFILE_RESULT="
-
-    for line in completed.stdout.splitlines():
-        if line.startswith(prefix):
-            return json.loads(
-                line[len(prefix):]
-            )
-
-    raise RuntimeError(
-        "profile_etl.py did not produce "
-        "a PROFILE_RESULT line"
-    )
-
-
-def add_profile_data(result, profile):
-    profiled_wall = profile[
+def add_profile_data(result, profile_result):
+    profiled_wall = profile_result[
         "total_profiled_wall_seconds"
     ]
 
@@ -488,11 +352,11 @@ def add_profile_data(result, profile):
         profiled_wall
     )
 
-    result["rows"] = profile["rows"]
+    result["rows"] = profile_result["rows"]
 
-    timings = profile["timings"]
-    timings_cpu = profile["timings_cpu"]
-    timings_waiting = profile["timings_waiting"]
+    timings = profile_result["timings"]
+    timings_cpu = profile_result["timings_cpu"]
+    timings_waiting = profile_result["timings_waiting"]
 
     for phase in PHASES:
         seconds = timings.get(phase, 0.0)
@@ -528,7 +392,6 @@ def add_profile_data(result, profile):
 def save_results(results):
     columns = [
         ("workload_pages", "INTEGER"),
-        ("implementation", "TEXT"),
         ("run", "INTEGER"),
         ("source_rtt_ms", "INTEGER"),
         ("clean_wall_seconds", "REAL"),
@@ -547,11 +410,16 @@ def save_results(results):
         columns.append((f"profile_{phase}_waiting_seconds", "REAL"))
 
     column_names = [name for name, _ in columns]
-    column_defs = ", ".join(f"{name} {type_}" for name, type_ in columns)
+    column_defs = ", ".join(
+        f"{name} {type_}"
+        for name, type_ in columns
+    )
     placeholders = ", ".join("?" for _ in columns)
 
     with sqlite3.connect(RESULTS_DB) as conn:
-        conn.execute(f"CREATE TABLE IF NOT EXISTS results ({column_defs}) STRICT")
+        conn.execute(
+            f"CREATE TABLE IF NOT EXISTS results ({column_defs}) STRICT"
+        )
         conn.executemany(
             f"INSERT INTO results ({', '.join(column_names)}) "
             f"VALUES ({placeholders})",
@@ -560,8 +428,6 @@ def save_results(results):
                 for result in results
             ],
         )
-
-    conn.close()
 
 
 def print_summary(results):
@@ -590,91 +456,88 @@ def print_summary(results):
                 f"RTT latency={source_rtt_ms} ms"
             )
 
-            for name in IMPLEMENTATIONS:
-                matching = [
-                    result
-                    for result in results
-                    if result["workload_pages"] == pages
-                    and result["source_rtt_ms"] == source_rtt_ms
-                    and result["implementation"] == name
-                ]
+            matching = [
+                result
+                for result in results
+                if result["workload_pages"] == pages
+                and result["source_rtt_ms"] == source_rtt_ms
+            ]
 
-                wall_times = [
-                    result["clean_wall_seconds"]
+            wall_times = [
+                result["clean_wall_seconds"]
+                for result in matching
+            ]
+
+            cpu_times = [
+                result["python_cpu_seconds"]
+                for result in matching
+            ]
+
+            waiting_times = [
+                result["waiting_seconds"]
+                for result in matching
+            ]
+
+            cpu_percentages = [
+                result["cpu_percent"]
+                for result in matching
+            ]
+
+            print(
+                f"median wall="
+                f"{statistics.median(wall_times):.2f}s | "
+                f"median Python CPU="
+                f"{statistics.median(cpu_times):.2f}s | "
+                f"median waiting="
+                f"{statistics.median(waiting_times):.2f}s"
+            )
+
+            print(
+                f"median CPU utilisation="
+                f"{statistics.median(cpu_percentages):.2f}%"
+            )
+
+            print(
+                "  Median phase wall / CPU / waiting:"
+            )
+
+            for phase in PHASES:
+                percentages = [
+                    result[
+                        f"profile_{phase}_percent"
+                    ]
                     for result in matching
                 ]
 
-                cpu_times = [
-                    result["python_cpu_seconds"]
+                cpu_seconds = [
+                    result[
+                        f"profile_{phase}_cpu_seconds"
+                    ]
                     for result in matching
                 ]
 
-                waiting_times = [
-                    result["waiting_seconds"]
-                    for result in matching
-                ]
-
-                cpu_percentages = [
-                    result["cpu_percent"]
+                waiting_seconds = [
+                    result[
+                        f"profile_{phase}_waiting_seconds"
+                    ]
                     for result in matching
                 ]
 
                 print(
-                    f"{name:10} "
-                    f"median wall="
-                    f"{statistics.median(wall_times):.2f}s | "
-                    f"median Python CPU="
-                    f"{statistics.median(cpu_times):.2f}s | "
-                    f"median waiting="
-                    f"{statistics.median(waiting_times):.2f}s"
+                    f"    {phase:20} "
+                    f"{statistics.median(percentages):6.2f}% "
+                    f"CPU="
+                    f"{statistics.median(cpu_seconds):.2f}s "
+                    f"waiting="
+                    f"{statistics.median(waiting_seconds):.2f}s"
                 )
-
-                print(
-                    f"{'':10} "
-                    f"median CPU utilisation="
-                    f"{statistics.median(cpu_percentages):.2f}%"
-                )
-
-                print(
-                    "  Median phase wall / CPU / waiting:"
-                )
-
-                for phase in PHASES:
-                    percentages = [
-                        result[
-                            f"profile_{phase}_percent"
-                        ]
-                        for result in matching
-                    ]
-
-                    cpu_seconds = [
-                        result[
-                            f"profile_{phase}_cpu_seconds"
-                        ]
-                        for result in matching
-                    ]
-
-                    waiting_seconds = [
-                        result[
-                            f"profile_{phase}_waiting_seconds"
-                        ]
-                        for result in matching
-                    ]
-
-                    print(
-                        f"    {phase:20} "
-                        f"{statistics.median(percentages):6.2f}% "
-                        f"CPU="
-                        f"{statistics.median(cpu_seconds):.2f}s "
-                        f"waiting="
-                        f"{statistics.median(waiting_seconds):.2f}s"
-                    )
 
 
 def main():
     args = parse_args()
     validate_sizes(args.page_sizes)
     validate_latency(args.source_rtt_latency)
+
     try:
         results_by_key = {}
 
@@ -682,16 +545,18 @@ def main():
             print(
                 f"\n=== Workload size: {pages} pages ==="
             )
-    
-            generate_sources(pages)
-    
+
+            reset_latency_toxics(strict=True)
+            print(f"Generating source data for pages={pages}...")
+            generate(pages)
+
             for source_rtt_ms in args.source_rtt_latency:
                 print(
                     f"\n=== Source RTT: {source_rtt_ms} ms ==="
                 )
-    
+
                 print("=== Clean benchmark runs ===")
-    
+
                 # First run all clean benchmarks before profiling.
                 # This prevents profiling instrumentation from affecting
                 # the clean benchmark sequence.
@@ -703,36 +568,32 @@ def main():
                         f"\nClean run "
                         f"{run_number}/{REPEATS}"
                     )
-    
-                    for name, script in implementation_order(
-                        run_number
-                    ):
-                        print(f"Benchmarking {name}...")
-                        result = run_clean_benchmark(
-                            name,
-                            script,
-                            source_rtt_ms,
-                        )
-                        result["workload_pages"] = pages
-                        result["run"] = run_number
-                        result["source_rtt_ms"] = source_rtt_ms
-                        result["timestamp"] = time.asctime()
-                        results_by_key[
-                            (pages, source_rtt_ms, run_number, name)
-                        ] = result
-    
-                        print(
-                            f"  Wall: "
-                            f"{result['clean_wall_seconds']:.2f}s"
-                        )
-    
-                        print(
-                            f"  Python CPU: "
-                            f"{result['python_cpu_seconds']:.2f}s"
-                        )
-    
+
+                    result = run_clean_benchmark(
+                        source_rtt_ms
+                    )
+
+                    result["workload_pages"] = pages
+                    result["run"] = run_number
+                    result["source_rtt_ms"] = source_rtt_ms
+                    result["timestamp"] = time.asctime()
+
+                    results_by_key[
+                        (pages, source_rtt_ms, run_number)
+                    ] = result
+
+                    print(
+                        f"  Wall: "
+                        f"{result['clean_wall_seconds']:.2f}s"
+                    )
+
+                    print(
+                        f"  Python CPU: "
+                        f"{result['python_cpu_seconds']:.2f}s"
+                    )
+
                 print("\n=== Phase profiling runs ===")
-    
+
                 # Profiling is deliberately done after all clean benchmarks
                 # because the profiler adds overhead.
                 for run_number in range(
@@ -743,38 +604,40 @@ def main():
                         f"\nProfile run "
                         f"{run_number}/{REPEATS}"
                     )
-    
-                    for name, _ in implementation_order(
-                        run_number
-                    ):
-                        print(f"Profiling {name}...")
-                        profile = run_profile(name, source_rtt_ms)
-                        result = results_by_key[
-                            (pages, source_rtt_ms, run_number, name)
-                        ]
-                        add_profile_data(result, profile)
-    
-                        print(
-                            f"  Profiled wall: "
-                            f"{profile['total_profiled_wall_seconds']:.2f}s"
-                        )
-    
+
+                    prepare_benchmark(source_rtt_ms)
+
+                    print("  Resetting warehouse...")
+                    reset_warehouse()
+
+                    profile_result = profile()
+
+                    result = results_by_key[
+                        (pages, source_rtt_ms, run_number)
+                    ]
+
+                    add_profile_data(
+                        result,
+                        profile_result,
+                    )
+
+                    print(
+                        f"  Profiled wall: "
+                        f"{profile_result['total_profiled_wall_seconds']:.2f}s"
+                    )
+
         results = [
             results_by_key[key]
-            for key in sorted(
-                results_by_key,
-                key=lambda value: (
-                    value[0],
-                    value[1],
-                    value[2],
-                    value[3],
-                ),
-            )
+            for key in sorted(results_by_key)
         ]
+
         save_results(results)
+
     finally:
         reset_latency_toxics(strict=False)
+
     print_summary(results)
+
     print(
         f"\nResults written to: "
         f"{RESULTS_DB.resolve()}"
