@@ -71,6 +71,8 @@ def create_etl():
     dw_database = os.getenv("DW_DATABASE")
     source_host = os.getenv("SOURCE_HOST", "localhost")
     source_port_value = os.getenv("SOURCE_PORT", "5432")
+    dw_host = os.getenv("DW_HOST", "localhost")
+    dw_port_value = os.getenv("DW_PORT", "5432")
 
     try:
         source_port = int(source_port_value)
@@ -79,9 +81,17 @@ def create_etl():
             f"SOURCE_PORT must be an integer, got {source_port_value!r}"
         )
 
+    try:
+        dw_port = int(dw_port_value)
+    except ValueError:
+        raise ValueError(
+            f"DW_PORT must be an integer, got {dw_port_value!r}"
+        )
+
     # Connection to target DW
     pgconn = psycopg2.connect(
-        host="localhost",
+        host=dw_host,
+        port=dw_port,
         dbname=dw_database,
         user=username,
     )
