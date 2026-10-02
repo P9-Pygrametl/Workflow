@@ -1,11 +1,9 @@
-import argparse
+import io
 import os
 import random
-from itertools import islice
 
 import psycopg2
 from dotenv import load_dotenv
-from psycopg2.extras import execute_values
 
 from datagenerator import datagenerator
 
@@ -13,29 +11,23 @@ from datagenerator import datagenerator
 load_dotenv()
 
 
-def create_source_tables(connection):
-    with connection.cursor() as cursor:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS downloadlog (
-                localfile TEXT PRIMARY KEY,
-                url TEXT NOT NULL,
-                serverversion TEXT NOT NULL,
-                size INTEGER NOT NULL,
-                downloaddate DATE NOT NULL,
-                lastmoddate DATE NOT NULL
-            )
-        """)
+DOWNLOAD_COLUMNS = (
+    "localfile",
+    "url",
+    "serverversion",
+    "size",
+    "downloaddate",
+    "lastmoddate",
+)
 
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS testresults (
-                localfile TEXT NOT NULL,
-                test TEXT NOT NULL,
-                errors INTEGER NOT NULL,
-                PRIMARY KEY (localfile, test)
-            )
-        """)
+TEST_COLUMNS = (
+    "localfile",
+    "test",
+    "errors",
+)
 
-    connection.commit()
+# How many rows to buffer before flushing to PostgreSQL. 
+ROWS_PER_FLUSH = 100000
 
 
 def generate_download_rows():
@@ -104,70 +96,116 @@ def generate_download_rows():
             yield tuple(line)
 
 
-def insert_download_rows(connection, rows):
+class BulkInserter:
+    """Buffers rows for one table and loads them in bulk with COPY."""
+
+    def __init__(self, table, columns, rows_per_flush=ROWS_PER_FLUSH):
+        self.table = table
+        self.columns = columns
+        self.rows_per_flush = rows_per_flush
+        self.buffer = io.StringIO()
+        self.count = 0
+
+    def add(self, cursor, row):
+        self.buffer.write("\t".join(str(value) for value in row))
+        self.buffer.write("\n")
+        self.count += 1
+
+        if self.count >= self.rows_per_flush:
+            self.flush(cursor)
+
+    def flush(self, cursor):
+        if not self.buffer.tell():
+            return
+
+        self.buffer.seek(0)
+        cursor.copy_from(self.buffer, self.table, columns=self.columns)
+        self.buffer.seek(0)
+        self.buffer.truncate(0)
+        self.count = 0
+
+
+def test_rows_for_download(download_row):
+    localfile = download_row[0]
+    size = download_row[3]
+    lastmoddate = download_row[5]
+
+    day = int(lastmoddate.split("-")[-1])
+
+    for test_number in range(datagenerator.tests):
+        test = "Test%d" % test_number
+        errors = (test_number * size) % day
+
+        yield (localfile, test, errors)
+
+
+def insert_source_rows(
+    connection,
+    download_rows,
+    rows_per_flush=ROWS_PER_FLUSH,
+):
+    download_inserter = BulkInserter(
+        "downloadlog",
+        DOWNLOAD_COLUMNS,
+        rows_per_flush,
+    )
+    test_inserter = BulkInserter(
+        "testresults",
+        TEST_COLUMNS,
+        rows_per_flush,
+    )
+
     with connection.cursor() as cursor:
-        cursor.executemany(
-            """
-            INSERT INTO downloadlog (
-                localfile,
-                url,
-                serverversion,
-                size,
-                downloaddate,
-                lastmoddate
-            )
-            VALUES (%s, %s, %s, %s, %s, %s)
-            """,
-            rows,
+        for download_row in download_rows:
+            download_inserter.add(cursor, download_row)
+
+            for test_row in test_rows_for_download(download_row):
+                test_inserter.add(cursor, test_row)
+
+        download_inserter.flush(cursor)
+        test_inserter.flush(cursor)
+
+
+def recreate_source_tables(connection):
+    # The primary keys are added after loading (see create_primary_keys):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "DROP TABLE IF EXISTS testresults, downloadlog"
         )
 
-    connection.commit()
-
-
-def generate_test_rows(download_rows):
-    for download_row in download_rows:
-        localfile = download_row[0]
-        size = download_row[3]
-        lastmoddate = download_row[5]
-
-        day = int(lastmoddate.split("-")[-1])
-
-        for test_number in range(datagenerator.tests):
-            test = "Test%d" % test_number
-            errors = (test_number * size) % day
-
-            yield (localfile, test, errors)
-
-
-def insert_test_rows(connection, rows, batch_size=10000):
-    with connection.cursor() as cursor:
-        while True:
-            batch = list(islice(rows, batch_size))
-
-            if not batch:
-                break
-
-            execute_values(
-                cursor,
-                """
-                INSERT INTO testresults (
-                    localfile,
-                    test,
-                    errors
-                )
-                VALUES %s
-                """,
-                batch,
+        cursor.execute("""
+            CREATE TABLE downloadlog (
+                localfile TEXT NOT NULL,
+                url TEXT NOT NULL,
+                serverversion TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                downloaddate DATE NOT NULL,
+                lastmoddate DATE NOT NULL
             )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE testresults (
+                localfile TEXT NOT NULL,
+                test TEXT NOT NULL,
+                errors INTEGER NOT NULL
+            )
+        """)
 
     connection.commit()
 
 
-def clear_source_tables(connection):
+def create_primary_keys(connection):
     with connection.cursor() as cursor:
-        cursor.execute("TRUNCATE TABLE testresults, downloadlog")
+        cursor.execute(
+            "ALTER TABLE downloadlog "
+            "ADD PRIMARY KEY (localfile)"
+        )
 
-    connection.commit()
+        cursor.execute(
+            "ALTER TABLE testresults "
+            "ADD PRIMARY KEY (localfile, test)"
+        )
 
 
 def generate(pages=None):
@@ -201,50 +239,18 @@ def generate(pages=None):
     try:
         print("Connected successfully")
 
-        create_source_tables(connection)
-        clear_source_tables(connection)
+        recreate_source_tables(connection)
 
-        print("Generating download data...")
+        print("Generating source data...")
 
         download_rows = generate_download_rows()
-        insert_download_rows(connection, download_rows)
+        insert_source_rows(connection, download_rows)
 
-        print("Download rows inserted successfully")
+        # Build the primary keys once the data has been loaded.
+        create_primary_keys(connection)
+        connection.commit()
 
-        print("Generating test result data...")
-
-        # Fresh generator because the previous one was consumed.
-        download_rows = generate_download_rows()
-        test_rows = generate_test_rows(download_rows)
-
-        insert_test_rows(connection, test_rows)
-
-        print("Test result rows inserted successfully")
+        print("Source rows inserted successfully")
 
     finally:
         connection.close()
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description=(
-            "Generate PostgreSQL source data for the ETL benchmark."
-        )
-    )
-
-    parser.add_argument(
-        "--pages",
-        type=int,
-        help=(
-            "Number of pages per domain. "
-            "Defaults to the module configuration."
-        ),
-    )
-
-    args = parser.parse_args()
-
-    generate(args.pages)
-
-
-if __name__ == "__main__":
-    main()
