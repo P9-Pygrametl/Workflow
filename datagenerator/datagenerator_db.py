@@ -2,7 +2,7 @@ import io
 import os
 import random
 
-import psycopg2
+import psycopg
 from dotenv import load_dotenv
 
 from datagenerator import datagenerator
@@ -119,7 +119,14 @@ class BulkInserter:
             return
 
         self.buffer.seek(0)
-        cursor.copy_from(self.buffer, self.table, columns=self.columns)
+        copy_sql = psycopg.sql.SQL("COPY {} ({}) FROM STDIN").format(
+            psycopg.sql.Identifier(self.table),
+            psycopg.sql.SQL(", ").join(
+                psycopg.sql.Identifier(column) for column in self.columns
+            ),
+        )
+        with cursor.copy(copy_sql) as copy:
+            copy.write(self.buffer.read())
         self.buffer.seek(0)
         self.buffer.truncate(0)
         self.count = 0
@@ -229,7 +236,7 @@ def generate(pages=None):
             f"SOURCE_PORT must be an integer, got {source_port_value!r}"
         )
 
-    connection = psycopg2.connect(
+    connection = psycopg.connect(
         host=source_host,
         port=source_port,
         dbname=source_database,

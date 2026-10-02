@@ -1,7 +1,7 @@
 import sqlite3
 import os
 import statistics
-import psycopg2
+import psycopg
 import sys
 import time
 from pathlib import Path
@@ -75,7 +75,7 @@ def reset_warehouse():
     """Reset the PostgreSQL data warehouse using the star schema."""
     schema = (ROOT / "starschema.sql").read_text()
 
-    connection = psycopg2.connect(
+    connection = psycopg.connect(
         host=DW_HOST,
         port=DW_PORT,
         dbname=DW_DATABASE,
