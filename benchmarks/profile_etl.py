@@ -7,92 +7,31 @@ from cpygrametl1_db import (
     run_etl,
 )
 
+from benchmarks.timing import (
+    TimedIterable,
+    TimedProxy,
+    wrap_with_timing,
+)
+
 import pygrametl
 
 
-def timed_function(
-    function,
-    timing_name,
-    timings,
-    timings_cpu,
-):
-    def wrapper(*args, **kwargs):
-        wall_start = time.perf_counter()
-        cpu_start = time.process_time()
-
-        try:
-            return function(*args, **kwargs)
-        finally:
-            timings[timing_name] += (
-                time.perf_counter() - wall_start
-            )
-            timings_cpu[timing_name] += (
-                time.process_time() - cpu_start
-            )
-
-    return wrapper
-
-
-class TimedIterable:
-    def __init__(self, source, timings, timings_cpu):
-        self.source = source
-        self.timings = timings
-        self.timings_cpu = timings_cpu
-        self.rows = 0
-
-    def __iter__(self):
-        iterator = iter(self.source)
-
-        while True:
-            wall_start = time.perf_counter()
-            cpu_start = time.process_time()
-
-            try:
-                row = next(iterator)
-            except StopIteration:
-                self.timings["extraction_merge"] += (
-                    time.perf_counter() - wall_start
-                )
-                self.timings_cpu["extraction_merge"] += (
-                    time.process_time() - cpu_start
-                )
-                return
-
-            self.timings["extraction_merge"] += (
-                time.perf_counter() - wall_start
-            )
-            self.timings_cpu["extraction_merge"] += (
-                time.process_time() - cpu_start
-            )
-
-            self.rows += 1
-
-            yield row
-
-
-class TimedProxy:
-    def __init__(self, obj, methods, timings, timings_cpu):
-        self._obj = obj
-
-        for method_name, timing_name in methods.items():
-            method = getattr(obj, method_name)
-
-            setattr(
-                self,
-                method_name,
-                timed_function(
-                    method,
-                    timing_name,
-                    timings,
-                    timings_cpu,
-                ),
-            )
-
-    def __getattr__(self, name):
-        return getattr(self._obj, name)
-
-
 def profile():
+    """Profile the ETL execution by phase.
+
+    The ETL components are wrapped so that selected operations accumulate
+    wall-clock and Python CPU time for their corresponding phases. Time
+    not attributed to an explicitly measured phase is recorded as
+    ``other``.
+
+    Waiting time for each phase is estimated as the difference between
+    wall-clock and Python CPU time.
+
+    Returns:
+        A dictionary containing the processed row count, total profiled
+        wall-clock and CPU times, and per-phase wall-clock, CPU, and
+        estimated waiting times.
+    """
     timings = {
         "initialisation": 0.0,
         "extraction_merge": 0.0,
@@ -138,21 +77,21 @@ def profile():
         timings_cpu,
     )
 
-    timed_extractdomaininfo = timed_function(
+    timed_extractdomaininfo = wrap_with_timing(
         extractdomaininfo,
         "transformation",
         timings,
         timings_cpu,
     )
 
-    timed_extractserverinfo = timed_function(
+    timed_extractserverinfo = wrap_with_timing(
         extractserverinfo,
         "transformation",
         timings,
         timings_cpu,
     )
 
-    timed_getint = timed_function(
+    timed_getint = wrap_with_timing(
         pygrametl.getint,
         "transformation",
         timings,
@@ -242,17 +181,17 @@ def profile():
         get_int=timed_getint,
     )
 
-    main_seconds = time.perf_counter() - wall_start
-    main_cpu_seconds = time.process_time() - cpu_start
+    etl_wall_seconds = time.perf_counter() - wall_start
+    etl_cpu_seconds = time.process_time() - cpu_start
 
     total_profiled_wall = (
         timings["initialisation"]
-        + main_seconds
+        + etl_wall_seconds
     )
 
     total_profiled_cpu = (
         timings_cpu["initialisation"]
-        + main_cpu_seconds
+        + etl_cpu_seconds
     )
 
     measured = sum(timings.values())

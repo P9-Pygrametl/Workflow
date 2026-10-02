@@ -1,15 +1,9 @@
-import argparse
-import json
 import sqlite3
 import os
-import resource
 import statistics
-import subprocess
 import psycopg2
 import sys
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -23,13 +17,19 @@ sys.path.insert(0, str(ROOT))
 from benchmarks.profile_etl import profile
 from datagenerator.datagenerator_db import generate
 from cpygrametl1_db import main as run_etl
+from benchmarks.toxiproxy import (
+    prepare_latency,
+    reset_latency_toxics,
+)
+from benchmarks.benchmark_args_cli import (
+    parse_args,
+    validate_page_sizes,
+    validate_source_latency,
+)
 
 load_dotenv(ROOT / ".env")
 
 DW_DATABASE = os.getenv("DW_DATABASE")
-
-TOXIPROXY_API = os.getenv("TOXIPROXY_API")
-TOXIPROXY_PROXY = os.getenv("TOXIPROXY_PROXY")
 
 BENCHMARK_SCRIPT = "cpygrametl1_db.py"
 
@@ -60,235 +60,10 @@ if REPEATS < 1:
         "REPEATS must be at least 1"
     )
 
-DEFAULT_PAGE_SIZES = [100]
-DEFAULT_SOURCE_RTT_MS = [0]
-
 RESULTS_DB = ROOT / "data" / "benchmark_results.db"
 
-LATENCY_UP_TOXIC = "latency-up"
-LATENCY_DOWN_TOXIC = "latency-down"
-
-
-def toxiproxy_request(
-    method,
-    path,
-    payload=None,
-    ignore_not_found=False,
-):
-    url = f"{TOXIPROXY_API}{path}"
-
-    data = None
-    headers = {}
-
-    if payload is not None:
-        data = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-
-    request = urllib.request.Request(
-        url,
-        data=data,
-        headers=headers,
-        method=method,
-    )
-
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=10
-        ) as response:
-            return response.read()
-
-    except urllib.error.HTTPError as error:
-        if (
-            ignore_not_found
-            and error.code == 404
-        ):
-            return None
-
-        body = error.read().decode(
-            "utf-8",
-            errors="replace",
-        )
-
-        raise RuntimeError(
-            f"Toxiproxy request failed: "
-            f"{method} {url}\n"
-            f"HTTP {error.code}: {body}"
-        ) from error
-
-    except urllib.error.URLError as error:
-        raise RuntimeError(
-            f"Could not connect to Toxiproxy "
-            f"at {TOXIPROXY_API}: "
-            f"{error.reason}"
-        ) from error
-
-
-def reset_latency_toxics(strict=True):
-    if not (TOXIPROXY_API and TOXIPROXY_PROXY):
-        return False
-
-    try:
-        for toxic in (
-            LATENCY_UP_TOXIC,
-            LATENCY_DOWN_TOXIC,
-        ):
-            toxiproxy_request(
-                "DELETE",
-                (
-                    f"/proxies/{TOXIPROXY_PROXY}"
-                    f"/toxics/{toxic}"
-                ),
-                ignore_not_found=True,
-            )
-    except (RuntimeError, OSError) as error:
-        if strict:
-            raise
-
-        print(
-            f"Warning: could not reset Toxiproxy latency toxics: {error}\n"
-            f"Check manually: curl {TOXIPROXY_API}/proxies/"
-            f"{TOXIPROXY_PROXY}/toxics",
-            file=sys.stderr,
-        )
-        return False
-
-    return True
-
-
-def configure_toxiproxy(rtt_ms):
-    reset_latency_toxics(strict=True)
-
-    if rtt_ms == 0:
-        return
-
-    upstream_latency = rtt_ms // 2
-    downstream_latency = (
-        rtt_ms - upstream_latency
-    )
-
-    toxiproxy_request(
-        "POST",
-        (
-            f"/proxies/{TOXIPROXY_PROXY}"
-            "/toxics"
-        ),
-        {
-            "name": LATENCY_UP_TOXIC,
-            "type": "latency",
-            "stream": "upstream",
-            "toxicity": 1.0,
-            "attributes": {
-                "latency": upstream_latency,
-                "jitter": 0,
-            },
-        },
-    )
-
-    toxiproxy_request(
-        "POST",
-        (
-            f"/proxies/{TOXIPROXY_PROXY}"
-            "/toxics"
-        ),
-        {
-            "name": LATENCY_DOWN_TOXIC,
-            "type": "latency",
-            "stream": "downstream",
-            "toxicity": 1.0,
-            "attributes": {
-                "latency": downstream_latency,
-                "jitter": 0,
-            },
-        },
-    )
-
-
-def prepare_benchmark(rtt_ms):
-    if rtt_ms == 0:
-        if TOXIPROXY_API and TOXIPROXY_PROXY:
-            configure_toxiproxy(0)
-        return
-
-    if not TOXIPROXY_API:
-        raise RuntimeError(
-            f"Cannot apply {rtt_ms} ms latency because "
-            "TOXIPROXY_API is not configured in .env."
-        )
-
-    if not TOXIPROXY_PROXY:
-        raise RuntimeError(
-            f"Cannot apply {rtt_ms} ms latency because "
-            "TOXIPROXY_PROXY is not configured in .env"
-        )
-
-    print(
-        f"  Configuring Toxiproxy for "
-        f"{rtt_ms} ms RTT..."
-    )
-
-    configure_toxiproxy(rtt_ms)
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description=(
-            "Benchmark the PostgreSQL ETL implementation "
-            "across one or more workload sizes."
-        )
-    )
-
-    parser.add_argument(
-        "--page-sizes",
-        nargs="+",
-        dest="page_sizes",
-        type=int,
-        default=DEFAULT_PAGE_SIZES,
-        help=(
-            "Workload sizes expressed as generator page counts. "
-            "Example: --page-sizes 10 25 50 100"
-        ),
-    )
-
-    parser.add_argument(
-        "--source-rtt-latency",
-        nargs="+",
-        dest="source_rtt_latency",
-        type=int,
-        default=DEFAULT_SOURCE_RTT_MS,
-        help=(
-            "Simulated source round-trip times in milliseconds. "
-            "Example: --source-rtt-latency 0 50 100"
-        ),
-    )
-
-    return parser.parse_args()
-
-
-def validate_sizes(sizes):
-    invalid_sizes = [size for size in sizes if size < 1]
-
-    if invalid_sizes:
-        raise ValueError(
-            f"All sizes must be positive integers, got {invalid_sizes!r}"
-        )
-
-
-def validate_latency(latencies):
-    invalid_latencies = [
-        latency
-        for latency in latencies
-        if latency < 0
-    ]
-
-    if invalid_latencies:
-        raise ValueError(
-            "Latency values must be non-negative integers, "
-            f"got {invalid_latencies!r}"
-        )
-
-
 def reset_warehouse():
+    """Reset the PostgreSQL data warehouse using the star schema."""
     schema = (ROOT / "starschema.sql").read_text()
 
     connection = psycopg2.connect(
@@ -306,8 +81,24 @@ def reset_warehouse():
         connection.close()
 
 
-def run_clean_benchmark(rtt_ms):
-    prepare_benchmark(rtt_ms)
+def run_benchmark(rtt_ms):
+    """Run one unprofiled ETL benchmark.
+
+    The requested source latency is prepared and the data warehouse is
+    reset before execution. Wall-clock time and Python CPU time measure
+    only the ETL execution itself.
+
+    Waiting time is estimated as the difference between wall-clock and
+    Python CPU time.
+
+    Args:
+        rtt_ms: Source round-trip latency in milliseconds.
+
+    Returns:
+        A dictionary containing the source latency, wall-clock time,
+        Python CPU time, estimated waiting time, and CPU utilisation.
+    """
+    prepare_latency(rtt_ms)
 
     print("  Resetting warehouse...")
     reset_warehouse()
@@ -336,14 +127,26 @@ def run_clean_benchmark(rtt_ms):
 
     return {
         "source_rtt_ms": rtt_ms,
-        "clean_wall_seconds": wall_time,
+        "wall_seconds": wall_time,
         "python_cpu_seconds": cpu_time,
         "waiting_seconds": waiting_time,
         "cpu_percent": cpu_percent,
     }
 
 
-def add_profile_data(result, profile_result):
+def add_profile_data_to_result(result, profile_result):
+    """Add phase profiling measurements to a benchmark result.
+
+    The benchmark result is updated in place with the total profiled
+    wall time and processed row count. For every profiling phase, wall
+    time, percentage of total profiled wall time, CPU time, and
+    estimated waiting time are added.
+
+    Args:
+        result: Benchmark result dictionary to update.
+        profile_result: Profiling result containing total and per-phase
+            timing measurements.
+    """
     profiled_wall = profile_result[
         "total_profiled_wall_seconds"
     ]
@@ -390,11 +193,20 @@ def add_profile_data(result, profile_result):
 
 
 def save_results(results):
+    """Store benchmark results in the SQLite results database.
+
+    The results table is created when necessary. In addition to the
+    general benchmark measurements, timing columns are generated for
+    every phase listed in PHASES.
+
+    Args:
+        results: Benchmark result dictionaries to store.
+    """
     columns = [
         ("workload_pages", "INTEGER"),
         ("run", "INTEGER"),
         ("source_rtt_ms", "INTEGER"),
-        ("clean_wall_seconds", "REAL"),
+        ("wall_seconds", "REAL"),
         ("python_cpu_seconds", "REAL"),
         ("waiting_seconds", "REAL"),
         ("cpu_percent", "REAL"),
@@ -431,6 +243,11 @@ def save_results(results):
 
 
 def print_summary(results):
+    """Print median benchmark measurements grouped by workload and latency.
+
+    Args:
+        results: Benchmark result dictionaries to summarise.
+    """
     print("\nBenchmark summary")
     print("-" * 60)
 
@@ -464,7 +281,7 @@ def print_summary(results):
             ]
 
             wall_times = [
-                result["clean_wall_seconds"]
+                result["wall_seconds"]
                 for result in matching
             ]
 
@@ -534,9 +351,10 @@ def print_summary(results):
 
 
 def main():
+    """Run all requested benchmark and profiling configurations."""
     args = parse_args()
-    validate_sizes(args.page_sizes)
-    validate_latency(args.source_rtt_latency)
+    validate_page_sizes(args.page_sizes)
+    validate_source_latency(args.source_rtt_latency)
 
     try:
         results_by_key = {}
@@ -569,7 +387,7 @@ def main():
                         f"{run_number}/{REPEATS}"
                     )
 
-                    result = run_clean_benchmark(
+                    result = run_benchmark(
                         source_rtt_ms
                     )
 
@@ -584,7 +402,7 @@ def main():
 
                     print(
                         f"  Wall: "
-                        f"{result['clean_wall_seconds']:.2f}s"
+                        f"{result['wall_seconds']:.2f}s"
                     )
 
                     print(
@@ -605,7 +423,7 @@ def main():
                         f"{run_number}/{REPEATS}"
                     )
 
-                    prepare_benchmark(source_rtt_ms)
+                    prepare_latency(source_rtt_ms)
 
                     print("  Resetting warehouse...")
                     reset_warehouse()
@@ -616,7 +434,7 @@ def main():
                         (pages, source_rtt_ms, run_number)
                     ]
 
-                    add_profile_data(
+                    add_profile_data_to_result(
                         result,
                         profile_result,
                     )
