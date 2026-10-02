@@ -27,6 +27,15 @@ from cpygrametl1_db import main as run_etl
 load_dotenv(ROOT / ".env")
 
 DW_DATABASE = os.getenv("DW_DATABASE")
+DW_HOST = os.getenv("DW_HOST", "localhost")
+DW_PORT_RAW = os.getenv("DW_PORT", "5432")
+
+try:
+    DW_PORT = int(DW_PORT_RAW)
+except ValueError as error:
+    raise ValueError(
+        f"DW_PORT must be an integer, got {DW_PORT_RAW!r}"
+    ) from error
 
 TOXIPROXY_API = os.getenv("TOXIPROXY_API")
 TOXIPROXY_PROXY = os.getenv("TOXIPROXY_PROXY")
@@ -292,7 +301,8 @@ def reset_warehouse():
     schema = (ROOT / "starschema.sql").read_text()
 
     connection = psycopg2.connect(
-        host="localhost",
+        host=DW_HOST,
+        port=DW_PORT,
         dbname=DW_DATABASE,
         user=os.getenv("USERNAME"),
     )
