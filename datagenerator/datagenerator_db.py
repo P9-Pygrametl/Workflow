@@ -163,11 +163,41 @@ def insert_source_rows(
     )
 
     with connection.cursor() as cursor:
-        with cursor.copy(
-            "COPY testresults (localfile, test, errors) FROM STDIN"
-        ) as copy:
-            for row in rows:
-                copy.write_row(row)
+        for download_row in download_rows:
+            download_inserter.add(cursor, download_row)
+
+            for test_row in test_rows_for_download(download_row):
+                test_inserter.add(cursor, test_row)
+
+        download_inserter.flush(cursor)
+        test_inserter.flush(cursor)
+
+
+def recreate_source_tables(connection):
+    # The primary keys are added after loading (see create_primary_keys):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            "DROP TABLE IF EXISTS testresults, downloadlog"
+        )
+
+        cursor.execute("""
+            CREATE TABLE downloadlog (
+                localfile TEXT NOT NULL,
+                url TEXT NOT NULL,
+                serverversion TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                downloaddate DATE NOT NULL,
+                lastmoddate DATE NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE testresults (
+                localfile TEXT NOT NULL,
+                test TEXT NOT NULL,
+                errors INTEGER NOT NULL
+            )
+        """)
 
     connection.commit()
 

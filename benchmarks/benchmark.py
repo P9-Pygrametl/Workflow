@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 from benchmarks.profile_etl import profile
 from datagenerator.datagenerator_db import generate
-from cpygrametl2_db import main as run_etl
+from cpygrametl1_db import main as run_etl
 from benchmarks.toxiproxy import (
     prepare_latency,
     reset_latency_toxics,
