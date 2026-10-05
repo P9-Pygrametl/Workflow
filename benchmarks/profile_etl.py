@@ -1,6 +1,6 @@
 import time
 
-from cpygrametl1_db import (
+from cpygrametl2_db import (
     create_etl,
     extractdomaininfo,
     extractserverinfo,
