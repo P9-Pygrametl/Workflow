@@ -20,6 +20,7 @@ from cpygrametl1_db import main as run_etl
 from benchmarks.toxiproxy import (
     prepare_latency,
     reset_latency_toxics,
+    setup_toxiproxy_routing,
 )
 from benchmarks.benchmark_args_cli import (
     parse_args,
@@ -365,6 +366,8 @@ def main():
     args = parse_args()
     validate_page_sizes(args.page_sizes)
     validate_source_latency(args.source_rtt_latency)
+    if args.source_rtt_latency_requested:
+        setup_toxiproxy_routing()
 
     try:
         results_by_key = {}

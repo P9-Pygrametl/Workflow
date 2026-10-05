@@ -31,14 +31,18 @@ def parse_args():
         nargs="+",
         dest="source_rtt_latency",
         type=int,
-        default=DEFAULT_SOURCE_RTT_MS,
+        default=None,
         help=(
             "Simulated source round-trip times in milliseconds. "
             "Example: --source-rtt-latency 0 50 100"
         ),
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    args.source_rtt_latency_requested = args.source_rtt_latency is not None
+    if args.source_rtt_latency is None:
+        args.source_rtt_latency = DEFAULT_SOURCE_RTT_MS
+    return args
 
 
 def validate_page_sizes(sizes):

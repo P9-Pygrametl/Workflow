@@ -3,6 +3,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -17,6 +18,8 @@ TOXIPROXY_PROXY = os.getenv("TOXIPROXY_PROXY")
 
 LATENCY_UP_TOXIC = "latency-up"
 LATENCY_DOWN_TOXIC = "latency-down"
+PROXY_LISTEN = "0.0.0.0:15432"
+PROXY_UPSTREAM = "source-db:5432"
 
 
 def toxiproxy_request(
@@ -88,6 +91,53 @@ def toxiproxy_request(
             f"{error.reason}"
         ) from error
 
+def ensure_proxy():
+    """Create the Toxiproxy proxy if it doesn't exist yet."""
+    existing = toxiproxy_request(
+        "GET",
+        f"/proxies/{TOXIPROXY_PROXY}",
+        ignore_not_found=True,
+    )
+
+    if existing is not None:
+        upstream = json.loads(existing)["upstream"]
+        if upstream != PROXY_UPSTREAM:
+            raise RuntimeError(
+                f"Proxy {TOXIPROXY_PROXY!r} already exists with upstream "
+                f"{upstream!r}, expected {PROXY_UPSTREAM!r}."
+            )
+        return
+
+    print(f"Creating Toxiproxy proxy {TOXIPROXY_PROXY!r}...")
+    toxiproxy_request(
+        "POST",
+        "/proxies",
+        {
+            "name": TOXIPROXY_PROXY,
+            "listen": PROXY_LISTEN,
+            "upstream": PROXY_UPSTREAM,
+        },
+    )
+
+def setup_toxiproxy_routing():
+    """Dynamically configure the environment to route through Toxiproxy."""
+    try:
+        ensure_proxy()
+        response = toxiproxy_request("GET", f"/proxies/{TOXIPROXY_PROXY}")
+        data = json.loads(response)
+        proxy_port = data.get("listen", "").split(":")[-1]
+        
+        # Extract the host dynamically from the API URL
+        proxy_host = urlparse(TOXIPROXY_API).hostname or "127.0.0.1"
+        
+        print(f"Auto-routing through Toxiproxy on {proxy_host}:{proxy_port}")
+        os.environ["SOURCE_PORT"] = proxy_port
+        os.environ["SOURCE_HOST"] = proxy_host
+    except Exception as e:
+        sys.exit(
+            f"Error configuring routing: {e}\n"
+            "Ensure the Docker containers are running (docker compose up -d)."
+        )
 
 def reset_latency_toxics(strict=True):
     """Remove the benchmark latency toxics from Toxiproxy.
