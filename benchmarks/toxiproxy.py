@@ -121,23 +121,26 @@ def ensure_proxy():
 
 def setup_toxiproxy_routing():
     """Dynamically configure the environment to route through Toxiproxy."""
+    ensure_proxy()
+
+    response = toxiproxy_request("GET", f"/proxies/{TOXIPROXY_PROXY}")
+
     try:
-        ensure_proxy()
-        response = toxiproxy_request("GET", f"/proxies/{TOXIPROXY_PROXY}")
-        data = json.loads(response)
-        proxy_port = data.get("listen", "").split(":")[-1]
-        
-        # Extract the host dynamically from the API URL
-        proxy_host = urlparse(TOXIPROXY_API).hostname or "127.0.0.1"
-        
-        print(f"Auto-routing through Toxiproxy on {proxy_host}:{proxy_port}")
-        os.environ["SOURCE_PORT"] = proxy_port
-        os.environ["SOURCE_HOST"] = proxy_host
-    except Exception as e:
-        sys.exit(
-            f"Error configuring routing: {e}\n"
-            "Ensure the Docker containers are running (docker compose up -d)."
-        )
+        listen = json.loads(response)["listen"]
+    except (json.JSONDecodeError, KeyError) as error:
+        raise RuntimeError(
+            f"Unexpected response for proxy {TOXIPROXY_PROXY!r}: {error}"
+        ) from error
+
+    proxy_port = listen.rsplit(":", 1)[-1]
+    proxy_host = urlparse(TOXIPROXY_API).hostname or "127.0.0.1"
+
+    if not proxy_port.isdigit():
+        raise RuntimeError(f"Invalid Toxiproxy listen address: {listen!r}")
+
+    print(f"Auto-routing through Toxiproxy on {proxy_host}:{proxy_port}")
+    os.environ["SOURCE_HOST"] = proxy_host
+    os.environ["SOURCE_PORT"] = proxy_port
 
 def reset_latency_toxics(strict=True):
     """Remove the benchmark latency toxics from Toxiproxy.
