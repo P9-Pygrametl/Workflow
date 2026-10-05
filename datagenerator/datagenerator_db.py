@@ -119,7 +119,14 @@ class BulkInserter:
             return
 
         self.buffer.seek(0)
-        cursor.copy_from(self.buffer, self.table, columns=self.columns)
+        copy_sql = psycopg.sql.SQL("COPY {} ({}) FROM STDIN").format(
+            psycopg.sql.Identifier(self.table),
+            psycopg.sql.SQL(", ").join(
+                psycopg.sql.Identifier(column) for column in self.columns
+            ),
+        )
+        with cursor.copy(copy_sql) as copy:
+            copy.write(self.buffer.read())
         self.buffer.seek(0)
         self.buffer.truncate(0)
         self.count = 0

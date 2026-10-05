@@ -142,7 +142,7 @@ def create_etl():
         )
 
     # Connection to target DW
-    pgconn = psycopg2.connect(
+    pgconn = psycopg.connect(
         host=dw_host,
         port=dw_port,
         dbname=dw_database,
@@ -154,14 +154,14 @@ def create_etl():
     connection.execute("SET search_path TO pygrametlexa")
 
     # Connections to source database
-    sourceconn1 = psycopg2.connect(
+    sourceconn1 = psycopg.connect(
         host=source_host,
         port=source_port,
         dbname=source_database,
         user=username,
     )
 
-    sourceconn2 = psycopg2.connect(
+    sourceconn2 = psycopg.connect(
         host=source_host,
         port=source_port,
         dbname=source_database,
@@ -176,15 +176,14 @@ def create_etl():
         nullval,
         filehandle,
     ):
-        cursor = pgconn.cursor()
-
-        cursor.copy_from(
-            file=filehandle,
-            table=name,
-            sep=fieldsep,
-            null=str(nullval),
-            columns=atts,
+        sql = (
+            f"COPY {name}({', '.join(atts)}) FROM STDIN "
+            f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
         )
+        raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
+        with pgconn.cursor().copy(sql) as copy:
+            for chunk in iter(lambda: raw.read(1 << 20), b""):
+                copy.write(chunk)
 
     # Dimension and fact table objects
     pagedim = SlowlyChangingDimension(
