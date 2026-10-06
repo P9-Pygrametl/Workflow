@@ -1,15 +1,15 @@
-import datetime
 import time
 import psycopg
 import pygrametl
 import os
-from dotenv import load_dotenv, dotenv_values 
+from dotenv import load_dotenv
 load_dotenv() 
 
 from pygrametl import ConnectionWrapper
 from pygrametl.datasources import CSVSource, MergeJoiningSource
 from pygrametl.tables import CachedDimension, SnowflakedDimension,\
     SlowlyChangingDimension, BulkFactTable
+from helpers.helpers import datehandling, extractdomaininfo, extractserverinfo, pgcopybulkloader
 
 pgconn = psycopg.connect(
     host="localhost",
@@ -19,49 +19,6 @@ pgconn = psycopg.connect(
 connection = ConnectionWrapper(pgconn)
 connection.setasdefault()
 connection.execute('set search_path to pygrametlexa')
-
-# Methods
-def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filehandle):
-    sql = (
-        f"COPY {name}({', '.join(atts)}) FROM STDIN "
-        f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
-    )
-    raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
-    with pgconn.cursor().copy(sql) as copy:
-        for chunk in iter(lambda: raw.read(1 << 20), b""):
-            copy.write(chunk)
-
-def datehandling(row, namemapping):
-    # This method is called from ensure(row) when the lookup of a date fails.
-    # We have to calculate all date related fields and add them to the row.
-    date = pygrametl.getvalue(row, 'date', namemapping)
-    (year, month, day, hour, minute, second, weekday, dayinyear, dst) = \
-        time.strptime(date, "%Y-%m-%d")
-    (isoyear, isoweek, isoweekday) = \
-        datetime.date(year, month, day).isocalendar()
-    # We could use row[namemapping.get('day') or 'day'] = X to support name map.
-    row['day'] = day
-    row['month'] = month
-    row['year'] = year
-    row['week'] = isoweek
-    row['weekyear'] = isoyear
-    row['dateid'] = dayinyear + 366 * (year - 1990) #Allow dates from 1990-01-01
-    return row
-    
-
-def extractdomaininfo(row):
-    # Take the 'www.domain.org' part from 'http://www.domain.org/page.html'
-    # We also the host name ('www') in the domain in this example.
-    domaininfo = row['url'].split('/')[-2]
-    row['domain'] = domaininfo
-    # Take the top level which is the last part of the domain
-    row['topleveldomain'] = domaininfo.split('.')[-1]
-
-
-def extractserverinfo(row):
-    # Find the server name from a string like "ServerName/Version"
-    row['server'] = row['serverversion'].split('/')[0]
-
 
 # Dimension and fact table objects
 pagedim = SlowlyChangingDimension(
@@ -99,6 +56,7 @@ facttbl = BulkFactTable(
     keyrefs=['pageid', 'testid', 'dateid'],
     measures=['errors'], 
     bulkloader=pgcopybulkloader,
+    targetconnection=pgconn,
     bulksize=250000)
 
 

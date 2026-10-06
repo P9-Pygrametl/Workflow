@@ -28,46 +28,15 @@ from pygrametl.tables import (
     SlowlyChangingDimension,
 )
 
+from helpers.helpers import (
+    datehandling,
+    extractdomaininfo,
+    extractserverinfo,
+    convertsize,
+)
+
 BATCHSIZE = 500
 _connRef = []
-
-def datehandling(row, namemapping):
-    date = pygrametl.getvalue(row, "date", namemapping)
-    (
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        weekday,
-        dayinyear,
-        dst,
-    ) = time.strptime(date, "%Y-%m-%d")
-    isoyear, isoweek, isoweekday = datetime.date(
-        year, month, day
-    ).isocalendar()
-    row["day"] = day
-    row["month"] = month
-    row["year"] = year
-    row["week"] = isoweek
-    row["weekyear"] = isoyear
-    row["dateid"] = dayinyear + 366 * (year - 1990)
-    return row
-
-
-def extractdomaininfo(row):
-    domaininfo = row["url"].split("/")[-2]
-    row["domain"] = domaininfo
-    row["topleveldomain"] = domaininfo.split(".")[-1]
-
-
-def extractserverinfo(row):
-    row["server"] = row["serverversion"].split("/")[0]
-
-
-def convertsize(row):
-    row["size"] = pygrametl.getint(row["size"])
 
 
 def create_etl():
@@ -100,7 +69,7 @@ def create_etl():
     pgconn.autocommit = False
     _connRef.append(pgconn)
 
-    def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filename):
+    def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filename, targetconnection):
         sql = (
             f"COPY {name}({', '.join(atts)}) FROM STDIN "
             f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
@@ -191,6 +160,7 @@ def create_etl():
             measures=["errors"],
             bulksize=250000,
             bulkloader=shrdconn.copy().pgcopybulkloader,
+            targetconnection=None,
             usefilename=True,
         ),
         batchsize=BATCHSIZE,

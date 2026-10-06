@@ -1,4 +1,3 @@
-import datetime
 import os
 import time
 
@@ -14,109 +13,14 @@ from pygrametl.tables import (
     SlowlyChangingDimension,
 )
 
+from helpers.helpers import (
+    datehandling,
+    extractdomaininfo,
+    extractserverinfo,
+    pgcopybulkloader,
+)
 
 load_dotenv()
-
-username = os.getenv("USERNAME")
-source_database = os.getenv("SOURCE_DATABASE")
-dw_database = os.getenv("DW_DATABASE")
-source_host = os.getenv("SOURCE_HOST", "localhost")
-source_port_value = os.getenv("SOURCE_PORT", "5432")
-
-try:
-    source_port = int(source_port_value)
-except ValueError:
-    raise ValueError(
-        f"SOURCE_PORT must be an integer, got {source_port_value!r}"
-    )
-
-
-# Connection to target DW
-pgconn = psycopg.connect(
-    host="localhost",
-    dbname=dw_database,
-    user=username,
-)
-
-connection = ConnectionWrapper(pgconn)
-connection.setasdefault()
-connection.execute("SET search_path TO pygrametlexa")
-
-
-# Connections to source database
-sourceconn1 = psycopg.connect(
-    host=source_host,
-    port=source_port,
-    dbname=source_database,
-    user=username,
-)
-
-sourceconn2 = psycopg.connect(
-    host=source_host,
-    port=source_port,
-    dbname=source_database,
-    user=username,
-)
-
-
-# Methods
-def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filehandle):
-    sql = (
-        f"COPY {name}({', '.join(atts)}) FROM STDIN "
-        f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
-    )
-    raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
-    with pgconn.cursor().copy(sql) as copy:
-        for chunk in iter(lambda: raw.read(1 << 20), b""):
-            copy.write(chunk)
-
-
-def datehandling(row, namemapping):
-    # This method is called from ensure(row) when the lookup of a date fails.
-    # We have to calculate all date related fields and add them to the row.
-    date = pygrametl.getvalue(row, "date", namemapping)
-
-    (
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        weekday,
-        dayinyear,
-        dst,
-    ) = time.strptime(date, "%Y-%m-%d")
-
-    isoyear, isoweek, isoweekday = datetime.date(
-        year,
-        month,
-        day,
-    ).isocalendar()
-
-    row["day"] = day
-    row["month"] = month
-    row["year"] = year
-    row["week"] = isoweek
-    row["weekyear"] = isoyear
-    row["dateid"] = dayinyear + 366 * (year - 1990)
-
-    return row
-
-
-def extractdomaininfo(row):
-    # Take the 'www.domain.org' part from 'http://www.domain.org/page.html'.
-    domaininfo = row["url"].split("/")[-2]
-    row["domain"] = domaininfo
-
-    # Take the top level which is the last part of the domain.
-    row["topleveldomain"] = domaininfo.split(".")[-1]
-
-
-def extractserverinfo(row):
-    # Find the server name from a string like "ServerName/Version".
-    row["server"] = row["serverversion"].split("/")[0]
-
 
 def create_etl():
     username = os.getenv("USERNAME")
@@ -168,22 +72,7 @@ def create_etl():
         user=username,
     )
 
-    def pgcopybulkloader(
-        name,
-        atts,
-        fieldsep,
-        rowsep,
-        nullval,
-        filehandle,
-    ):
-        sql = (
-            f"COPY {name}({', '.join(atts)}) FROM STDIN "
-            f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
-        )
-        raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
-        with pgconn.cursor().copy(sql) as copy:
-            for chunk in iter(lambda: raw.read(1 << 20), b""):
-                copy.write(chunk)
+    
 
     # Dimension and fact table objects
     pagedim = SlowlyChangingDimension(
@@ -239,6 +128,7 @@ def create_etl():
         keyrefs=["pageid", "testid", "dateid"],
         measures=["errors"],
         bulkloader=pgcopybulkloader,
+        targetconnection=pgconn,
         bulksize=250000,
     )
 

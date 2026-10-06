@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 from benchmarks.profile_etl import profile
 from datagenerator.datagenerator_db import generate
-from cpygrametl1_db import main as run_etl
+from cpygrametl2_db import main as run_etl
 from benchmarks.toxiproxy import (
     prepare_latency,
     reset_latency_toxics,
@@ -40,7 +40,7 @@ except ValueError as error:
         f"DW_PORT must be an integer, got {DW_PORT_RAW!r}"
     ) from error
 
-BENCHMARK_SCRIPT = "cpygrametl1_db.py"
+BENCHMARK_SCRIPT = "cpygrametl2_db.py"
 
 PHASES = [
     "initialisation",
