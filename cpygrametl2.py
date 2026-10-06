@@ -1,20 +1,3 @@
-
-#  Copyright (c) 2011 Christian Thomsen (chr@cs.aau.dk)
-#  
-#  This file is free software: you may copy, redistribute and/or modify it  
-#  under the terms of the GNU General Public License version 2 
-#  as published by the Free Software Foundation.
-#  
-#  This file is distributed in the hope that it will be useful, but  
-#  WITHOUT ANY WARRANTY; without even the implied warranty of  
-#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU  
-#  General Public License for more details.  
-#  
-#  You should have received a copy of the GNU General Public License  
-#  along with this program.  If not, see <http://www.gnu.org/licenses/>.  
-#  
-
-
 import datetime
 import time
 import psycopg
@@ -26,8 +9,8 @@ load_dotenv()
 from pygrametl import ConnectionWrapper
 from pygrametl.datasources import CSVSource, MergeJoiningSource, ProcessSource,\
     TransformingSource
-from pygrametl.tables import CachedDimension, SnowflakedDimension,\
-    SlowlyChangingDimension, BulkFactTable, FactTable, \
+from pygrametl.tables import CachedDimension,\
+    SlowlyChangingDimension, BulkFactTable, \
     DecoupledDimension, DecoupledFactTable, DimensionPartitioner
 from pygrametl.parallel import shareconnectionwrapper,\
      getsharedsequencefactory
