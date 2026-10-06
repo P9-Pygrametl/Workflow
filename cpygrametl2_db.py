@@ -37,6 +37,73 @@ from helpers.helpers import (
 
 BATCHSIZE = 500
 _connRef = []
+_DW_CONNECTION_WRAPPER = None
+
+
+class PicklableConnectionWrapper(ConnectionWrapper):
+    def __init__(
+        self,
+        connect_kwargs,
+        stmtcachesize=1000,
+        paramstyle=None,
+        copyintonew=False,
+    ):
+        self._connect_kwargs = dict(connect_kwargs)
+        self._stmtcachesize = stmtcachesize
+        self._paramstyle = paramstyle
+        self._copyintonew = copyintonew
+
+        connection = psycopg.connect(**self._connect_kwargs)
+        connection.autocommit = False
+        super().__init__(
+            connection,
+            stmtcachesize=stmtcachesize,
+            paramstyle=paramstyle,
+            copyintonew=copyintonew,
+        )
+
+        global _DW_CONNECTION_WRAPPER
+        _DW_CONNECTION_WRAPPER = self
+
+    def __getstate__(self):
+        return {
+            "_connect_kwargs": self._connect_kwargs,
+            "_stmtcachesize": self._stmtcachesize,
+            "_paramstyle": self._paramstyle,
+            "_copyintonew": self._copyintonew,
+        }
+
+    def __setstate__(self, state):
+        self._connect_kwargs = state["_connect_kwargs"]
+        self._stmtcachesize = state["_stmtcachesize"]
+        self._paramstyle = state["_paramstyle"]
+        self._copyintonew = state["_copyintonew"]
+
+        connection = psycopg.connect(**self._connect_kwargs)
+        connection.autocommit = False
+        super().__init__(
+            connection,
+            stmtcachesize=self._stmtcachesize,
+            paramstyle=self._paramstyle,
+            copyintonew=self._copyintonew,
+        )
+
+        global _DW_CONNECTION_WRAPPER
+        _DW_CONNECTION_WRAPPER = self
+
+
+def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filename, targetconnection=None):
+    connection = targetconnection or _DW_CONNECTION_WRAPPER
+    if connection is None:
+        raise RuntimeError("DW connection wrapper is not initialized")
+
+    sql = (
+        f"COPY {name}({', '.join(atts)}) FROM STDIN "
+        f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
+    )
+    with open(filename, "rb") as f, connection.cursor().copy(sql) as copy:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            copy.write(chunk)
 
 
 def create_etl():
@@ -60,26 +127,18 @@ def create_etl():
     except ValueError:
         raise ValueError(f"DW_PORT must be an integer, got {dw_port_value!r}")
 
-    pgconn = psycopg.connect(
-        host=dw_host,
-        port=dw_port,
-        dbname=dw_database,
-        user=username,
+    pgconn = PicklableConnectionWrapper(
+        {
+            "host": dw_host,
+            "port": dw_port,
+            "dbname": dw_database,
+            "user": username,
+        }
     )
-    pgconn.autocommit = False
     _connRef.append(pgconn)
 
-    def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filename, targetconnection):
-        sql = (
-            f"COPY {name}({', '.join(atts)}) FROM STDIN "
-            f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
-        )
-        with open(filename, "rb") as f, pgconn.cursor().copy(sql) as copy:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                copy.write(chunk)
-
     shrdconn = shareconnectionwrapper(
-        ConnectionWrapper(pgconn), 10, (pgcopybulkloader,)
+        pgconn, 10, (pgcopybulkloader,)
     )
     shrdconn.execute("set search_path to pygrametlexa")
 
@@ -207,7 +266,7 @@ def create_etl():
                                      extractserverinfo, convertsize)
 
     # ProcessSource will also spawn worker threads.
-    inputdata = ProcessSource(transformeddata, batchsize=BATCHSIZE, queuesize=10)
+    inputdata = transformeddata
 
     return (
         shrdconn,
@@ -384,25 +443,17 @@ def create_etl():
     except ValueError:
         raise ValueError(f"DW_PORT must be an integer, got {dw_port_value!r}")
 
-    pgconn = psycopg.connect(
-        host=dw_host,
-        port=dw_port,
-        dbname=dw_database,
-        user=username,
+    pgconn = PicklableConnectionWrapper(
+        {
+            "host": dw_host,
+            "port": dw_port,
+            "dbname": dw_database,
+            "user": username,
+        }
     )
-    pgconn.autocommit = False
-
-    def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filename):
-        sql = (
-            f"COPY {name}({', '.join(atts)}) FROM STDIN "
-            f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
-        )
-        with open(filename, "rb") as f, pgconn.cursor().copy(sql) as copy:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                copy.write(chunk)
 
     shrdconn = shareconnectionwrapper(
-        ConnectionWrapper(pgconn), 10, (pgcopybulkloader,)
+        pgconn, 10, (pgcopybulkloader,)
     )
     shrdconn.execute("set search_path to pygrametlexa")
 
@@ -526,7 +577,7 @@ def create_etl():
 
     # Note: We omit TransformingSource/convertsize here because the mapping is
     # dynamically handled inside run_etl() using the timing proxy wrappers.
-    inputdata = ProcessSource(joineddata, batchsize=BATCHSIZE, queuesize=10)
+    inputdata = joineddata
 
     return (
         shrdconn,
