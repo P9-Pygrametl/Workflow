@@ -16,6 +16,26 @@ pgconn = psycopg.connect(
     dbname=os.getenv("DW_DATABASE"),
     user=os.getenv("USERNAME"),
 )
+
+
+
+def pgcopybulkloader(
+        name,
+        atts,
+        fieldsep,
+        rowsep,
+        nullval,
+        filehandle,
+    ):
+        sql = (
+            f"COPY {name}({', '.join(atts)}) FROM STDIN "
+            f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
+        )
+        raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
+        with pgconn.cursor().copy(sql) as copy:
+            for chunk in iter(lambda: raw.read(1 << 20), b""):
+                copy.write(chunk)
+
 connection = ConnectionWrapper(pgconn)
 connection.setasdefault()
 connection.execute('set search_path to pygrametlexa')
@@ -56,7 +76,6 @@ facttbl = BulkFactTable(
     keyrefs=['pageid', 'testid', 'dateid'],
     measures=['errors'], 
     bulkloader=pgcopybulkloader,
-    targetconnection=pgconn,
     bulksize=250000)
 
 

@@ -160,7 +160,6 @@ def create_etl():
             measures=["errors"],
             bulksize=250000,
             bulkloader=shrdconn.copy().pgcopybulkloader,
-            targetconnection=None,
             usefilename=True,
         ),
         batchsize=BATCHSIZE,

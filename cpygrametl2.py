@@ -93,7 +93,6 @@ facttbl = DecoupledFactTable(
         measures=['errors'], 
         bulksize=250000,
         bulkloader=shrdconn.copy().pgcopybulkloader,
-        targetconnection=None,  # The target connection is not used in the bulkloader function
         usefilename=True),
     batchsize=BATCHSIZE, queuesize=10,
     consumes=pagedim.parts,
