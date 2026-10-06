@@ -73,18 +73,17 @@ def create_etl():
     except ValueError:
         raise ValueError(f"DW_PORT must be an integer, got {dw_port_value!r}")
 
-    pgconn = PicklableConnectionWrapper(
-        {
-            "host": dw_host,
-            "port": dw_port,
-            "dbname": dw_database,
-            "user": username,
-        }
+    pgconn = psycopg.connect(
+        host=dw_host,
+        port=dw_port,
+        dbname=dw_database,
+        user=username,
     )
-    _connRef.append(pgconn)
+    picklable_pgconn = PicklableConnectionWrapper(pgconn)
+    _connRef.append(picklable_pgconn)
 
     shrdconn = shareconnectionwrapper(
-        pgconn, 10, (pgcopybulkloader,)
+        picklable_pgconn, 10, (pgcopybulkloader,)
     )
     shrdconn.execute("set search_path to pygrametlexa")
 
