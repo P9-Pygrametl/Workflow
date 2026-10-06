@@ -17,7 +17,6 @@ from helpers.helpers import (
     datehandling,
     extractdomaininfo,
     extractserverinfo,
-    pgcopybulkloader,
 )
 
 load_dotenv()

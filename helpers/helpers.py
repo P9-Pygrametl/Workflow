@@ -48,23 +48,5 @@ def extractserverinfo(row):
     row["server"] = row["serverversion"].split("/")[0]
 
 
-def pgcopybulkloader(
-        name,
-        atts,
-        fieldsep,
-        rowsep,
-        nullval,
-        filehandle,
-        targetconnection,
-    ):
-        sql = (
-            f"COPY {name}({', '.join(atts)}) FROM STDIN "
-            f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
-        )
-        raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
-        with targetconnection.cursor().copy(sql) as copy:
-            for chunk in iter(lambda: raw.read(1 << 20), b""):
-                copy.write(chunk)
-
 def convertsize(row):
     row["size"] = pygrametl.getint(row["size"])

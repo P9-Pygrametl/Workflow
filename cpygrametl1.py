@@ -9,7 +9,7 @@ from pygrametl import ConnectionWrapper
 from pygrametl.datasources import CSVSource, MergeJoiningSource
 from pygrametl.tables import CachedDimension, SnowflakedDimension,\
     SlowlyChangingDimension, BulkFactTable
-from helpers.helpers import datehandling, extractdomaininfo, extractserverinfo, pgcopybulkloader
+from helpers.helpers import datehandling, extractdomaininfo, extractserverinfo
 
 pgconn = psycopg.connect(
     host="localhost",
