@@ -24,7 +24,7 @@ DB_USERNAME = os.getenv("USERNAME")
 IMPLEMENTATIONS = {
     "csv": "cpygrametl1",
     "database": "cpygrametl1_db",
-    "database_async_extract": "cpygrametl_async_extract",  # match your actual filename, no .py
+    "database_async_extract": "cpygrametl1_db_async_minimal",  # match your actual filename, no .py
 }
 
 

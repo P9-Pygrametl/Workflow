@@ -1,25 +1,11 @@
 """
-Async extraction + synchronous pygrametl load.
+Async extraction with a synchronous pygrametl load.
 
-This is the one benchmark-justified async change: reading downloadlog and
-testresults concurrently, since they're independent connections/queries.
-Everything downstream (page/test/date dimensions, fact table) stays exactly
-as in the original workflow script and imports pygrametl unmodified.
-
-Two fixes are combined here, both discussed in the benchmarking thread:
-
-1. No named/server-side cursors (cursorarg=...). Plain cursor.execute() +
-   fetchall() per source. This alone removes ~3 of the ~5 round trips per
-   source (no BEGIN/DECLARE/CLOSE overhead) and should be applied even in
-   a fully synchronous version.
-2. The two sources' round trips run concurrently via asyncio.gather instead
-   of sequentially, since MergeJoiningSource's next(iter1) then next(iter2)
-   ordering doesn't actually require serial wall-clock execution -- the two
-   sources don't depend on each other's data.
-
-The merge-join itself happens in-memory after both fetches complete (both
-queries already ORDER BY localfile, so this preserves the same semantics
-MergeJoiningSource relies on, just materialized rather than streamed).
+The independent downloadlog and testresults queries run concurrently through
+asyncio.gather(). Each query uses a plain cursor and fetchall(), so its rows
+are materialized in memory before the two result sets are joined. The
+downstream page, test, date, and fact-table processing remains synchronous and
+uses pygrametl without modification.
 """
 
 import asyncio

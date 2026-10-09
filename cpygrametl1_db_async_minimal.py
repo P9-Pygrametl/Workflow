@@ -1,21 +1,10 @@
 """
-Minimal-diff async extraction.
+Async extraction with persistent named cursors and batched reads.
 
-Unlike cpygrametl_async_extract.py (plain cursor, single fetchall, new
-connection per call), this variant changes exactly ONE thing from
-cpygrametl1_db.py: the two source reads run concurrently instead of
-sequentially. Everything else is identical:
-
-- Named server-side cursors (matches SQLSource's cursorarg usage)
-- fetchmany-batched reading, same fetchsize
-- Persistent connections opened once at import time, not per call
-
-If this variant's extraction_merge time is close to cpygrametl1_db.py's,
-concurrency alone isn't buying much and the earlier async script's win was
-coming from the plain-cursor/fresh-connection approach, not from asyncio.
-If this variant's extraction_merge time is close to cpygrametl_async_extract.py's,
-concurrency is the real lever and the cursor/connection differences in that
-script were incidental.
+The independent downloadlog and testresults queries run concurrently through
+asyncio.gather(). Each query uses a named server-side cursor and fetchmany()
+with FETCHSIZE, while the results are materialized and joined in memory.
+The downstream pygrametl load remains synchronous and unchanged.
 """
 
 import asyncio
@@ -108,10 +97,6 @@ async def extract_merged_rows():
         fetch_named_cursor(conn2, "testresults_cursor", TESTRESULTS_SQL),
     )
 
-    # Same merge-join semantics as before: both queries ORDER BY localfile,
-    # so a hash join on the materialized lists preserves MergeJoiningSource's
-    # output. (Streaming merge-join would need re-architecting for true
-    # bounded memory -- out of scope for isolating the concurrency question.)
     by_localfile = {}
     for row in testresults_rows:
         by_localfile.setdefault(row["localfile"], []).append(row)

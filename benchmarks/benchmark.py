@@ -25,9 +25,9 @@ TOXIPROXY_API = os.getenv("TOXIPROXY_API")
 TOXIPROXY_PROXY = os.getenv("TOXIPROXY_PROXY")
 
 ALL_IMPLEMENTATIONS = {
-    "csv": "cpygrametl_batched_pipeline.py",
+    "csv": "cpygrametl1.py",
     "database": "cpygrametl1_db.py",
-    "database_async_extract": "cpygrametl_pipelined_extract.py",  # match your actual filename
+    "database_async_extract": "cpygrametl1_db_async_minimal.py",  # match your actual filename
 }
 
 BENCHMARK_IMPLEMENTATION = os.getenv(
@@ -40,14 +40,14 @@ IMPLEMENTATION_ALIASES = {
     "csv": "csv",
     "db": "database",
     "database": "database",
-    "async": "database_async_extract",
-    "database_async_extract": "database_async_extract",
+    "async": "database_async",
+    "database_async": "database_async",
 }
 
 if BENCHMARK_IMPLEMENTATION not in IMPLEMENTATION_ALIASES:
     raise ValueError(
         "BENCHMARK_IMPLEMENTATION must be one of: "
-        "both, csv, db, database, async, database_async_extract"
+        "both, csv, db, database, async, database_async"
     )
 
 selected_implementation = IMPLEMENTATION_ALIASES[
