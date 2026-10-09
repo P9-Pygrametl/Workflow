@@ -10,3 +10,5 @@ settings.json
 datagenerator/params.py
 benchmarks/benchmark_results.csv
 benchmarks/benchmark_results.db
+/correctnessCheck/baselineCSV/*
+/correctnessCheck/nogilCSV/*
