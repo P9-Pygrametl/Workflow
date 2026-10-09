@@ -3,6 +3,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -17,6 +18,8 @@ TOXIPROXY_PROXY = os.getenv("TOXIPROXY_PROXY")
 
 LATENCY_UP_TOXIC = "latency-up"
 LATENCY_DOWN_TOXIC = "latency-down"
+PROXY_LISTEN = "0.0.0.0:15432"
+PROXY_UPSTREAM = "source-db:5432"
 
 
 def toxiproxy_request(
@@ -88,6 +91,73 @@ def toxiproxy_request(
             f"{error.reason}"
         ) from error
 
+def ensure_proxy():
+    """Create the Toxiproxy proxy if it doesn't exist yet."""
+    existing = toxiproxy_request(
+        "GET",
+        f"/proxies/{TOXIPROXY_PROXY}",
+        ignore_not_found=True,
+    )
+
+    if existing is not None:
+        proxy = json.loads(existing)
+        upstream = proxy["upstream"]
+        listen = proxy["listen"]
+
+        if upstream != PROXY_UPSTREAM:
+            raise RuntimeError(
+                f"Proxy {TOXIPROXY_PROXY!r} already exists with upstream "
+                f"{upstream!r}, expected {PROXY_UPSTREAM!r}."
+            )
+
+        normalized_listen = listen.replace("[::]", "0.0.0.0")
+        if normalized_listen != PROXY_LISTEN:
+            raise RuntimeError(
+                f"Proxy {TOXIPROXY_PROXY!r} already exists with listen "
+                f"{listen!r}, expected {PROXY_LISTEN!r}."
+            )
+        
+        return proxy
+
+    print(f"Creating Toxiproxy proxy {TOXIPROXY_PROXY!r}...")
+    created = toxiproxy_request(
+        "POST",
+        "/proxies",
+        {
+            "name": TOXIPROXY_PROXY,
+            "listen": PROXY_LISTEN,
+            "upstream": PROXY_UPSTREAM,
+        },
+    )
+
+    try:
+        return json.loads(created)
+    except (json.JSONDecodeError, TypeError) as error:
+        raise RuntimeError(
+            f"Unexpected response while creating proxy "
+            f"{TOXIPROXY_PROXY!r}: {error}"
+        ) from error
+
+def setup_toxiproxy_routing():
+    """Dynamically configure the environment to route through Toxiproxy."""
+    proxy = ensure_proxy()
+
+    try:
+        listen = proxy["listen"]
+    except (KeyError, TypeError) as error:
+        raise RuntimeError(
+            f"Unexpected response for proxy {TOXIPROXY_PROXY!r}: {error}"
+        ) from error
+
+    proxy_port = listen.rsplit(":", 1)[-1]
+    proxy_host = urlparse(TOXIPROXY_API).hostname or "127.0.0.1"
+
+    if not proxy_port.isdigit():
+        raise RuntimeError(f"Invalid Toxiproxy listen address: {listen!r}")
+
+    print(f"Auto-routing through Toxiproxy on {proxy_host}:{proxy_port}")
+    os.environ["SOURCE_HOST"] = proxy_host
+    os.environ["SOURCE_PORT"] = proxy_port
 
 def reset_latency_toxics(strict=True):
     """Remove the benchmark latency toxics from Toxiproxy.

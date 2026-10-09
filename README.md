@@ -59,25 +59,20 @@ python3 benchmarks/benchmark.py --page-sizes 1
 `--page-sizes` takes one or more generator page counts and runs each workload
 size in turn. `--page-sizes 1` is a quick check; the default is `100`.
 
+Each configuration runs `REPEATS` times (set in `.env`, default `1`).
+Use 5 or more for meaningful medians.
+
 Results are written to `data/benchmark_results.db` (SQLite). You can browse
 them at <http://localhost:8080>.
 
 ### Simulated source latency
 
-Latency experiments route the source connection through Toxiproxy. Create the
-proxy once:
+Latency experiments route the source connection through Toxiproxy.
+
+To request one or more round-trip times in milliseconds:
 
 ```bash
-curl -X POST http://localhost:8474/proxies \
-  -H "Content-Type: application/json" \
-  -d '{"name":"source-postgres","listen":"0.0.0.0:15432","upstream":"source-db:5432"}'
-```
-
-Then point the benchmark at the proxy port and request one or more round-trip
-times in milliseconds:
-
-```bash
-SOURCE_PORT=15432 python3 benchmarks/benchmark.py \
+python3 benchmarks/benchmark.py \
   --page-sizes 1 --source-rtt-latency 0 50 100
 ```
 
