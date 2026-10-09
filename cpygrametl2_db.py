@@ -12,6 +12,7 @@ from pygrametl import PicklableConnectionWrapper
 from pygrametl.datasources import (
     MergeJoiningSource,
     SQLSource,
+    ProcessSource,
     TransformingSource,
 )
 from pygrametl.parallel import (
@@ -73,6 +74,7 @@ def create_etl():
     except ValueError:
         raise ValueError(f"DW_PORT must be an integer, got {dw_port_value!r}")
 
+    # Data Warehouse Connection
     pgconn = psycopg.connect(
         host=dw_host,
         port=dw_port,
@@ -87,21 +89,28 @@ def create_etl():
     )
     shrdconn.execute("set search_path to pygrametlexa")
 
-    sourceconn1 = psycopg.connect(
-        host=source_host,
-        port=source_port,
-        dbname=source_database,
-        user=username,
+    # Source Database Connections wrapped in PicklableConnectionWrapper
+    sourceconn1 = PicklableConnectionWrapper(
+        psycopg.connect(
+            host=source_host,
+            port=source_port,
+            dbname=source_database,
+            user=username,
+        )
     )
+    _connRef.append(sourceconn1)
 
-    sourceconn2 = psycopg.connect(
-        host=source_host,
-        port=source_port,
-        dbname=source_database,
-        user=username,
+    sourceconn2 = PicklableConnectionWrapper(
+        psycopg.connect(
+            host=source_host,
+            port=source_port,
+            dbname=source_database,
+            user=username,
+        )
     )
+    _connRef.append(sourceconn2)
 
-    # Sequence factory is created local to this call run to ensure thread-safety
+    # Sequence factory
     idfactory = getsharedsequencefactory(0)
 
     def getpagediminstances():
@@ -207,11 +216,13 @@ def create_etl():
         downloadlog, "localfile", testresults, "localfile"
     )
 
-    transformeddata = TransformingSource(joineddata, extractdomaininfo, 
-                                     extractserverinfo, convertsize)
+    transformeddata = TransformingSource(
+        joineddata, extractdomaininfo, extractserverinfo, convertsize
+    )
 
-    # ProcessSource will also spawn worker threads.
-    inputdata = transformeddata
+    inputdata = ProcessSource(
+        transformeddata, batchsize=BATCHSIZE, queuesize=10
+    )
 
     return (
         shrdconn,
@@ -253,8 +264,7 @@ def run_etl(
 
         shrdconn.commit()
     finally:
-        # Explicitly close and join the processes of the decoupled tables
-        # before closing the core database connections.
+        # Explicitly close and join processes/connections
         try:
             pagedim.close()
         except Exception:
@@ -265,7 +275,6 @@ def run_etl(
         except Exception:
             pass
 
-        # Close all data sources and connections
         sourceconn1.close()
         sourceconn2.close()
         shrdconn.close()
