@@ -19,10 +19,12 @@ sys.path.insert(0, str(ROOT))
 load_dotenv(ROOT / ".env")
 
 DW_DATABASE = os.getenv("DW_DATABASE")
+DB_USERNAME = os.getenv("USERNAME")
 
 IMPLEMENTATIONS = {
     "csv": "cpygrametl1",
     "database": "cpygrametl1_db",
+    "database_async_extract": "cpygrametl_async_extract",  # match your actual filename, no .py
 }
 
 
@@ -30,11 +32,15 @@ def reset_warehouse():
     subprocess.run(
         [
             "psql",
+            "-U",
+            DB_USERNAME,
+            "-d",
             DW_DATABASE,
             "-f",
             str(ROOT / "starschema.sql"),
         ],
         check=True,
+        cwd=ROOT,
         stdout=subprocess.DEVNULL,
     )
 
@@ -158,12 +164,27 @@ def profile(implementation):
     )
 
     # Measure extraction + MergeJoiningSource.
-    timed_input = TimedIterable(
-        module.inputdata,
-        timings,
-        timings_cpu,
-    )
-    module.inputdata = timed_input
+    #
+    # The async extraction script has no module-level `inputdata` iterable
+    # for TimedIterable to wrap -- extraction happens inside main() via a
+    # single run_extraction() call, not a per-row generator. Wrap that
+    # function directly instead, and read the row count back from the
+    # module-level counter it sets rather than from TimedIterable.rows.
+    if implementation == "database_async_extract":
+        timed_input = None
+        module.run_extraction = timed_function(
+            module.run_extraction,
+            "extraction_merge",
+            timings,
+            timings_cpu,
+        )
+    else:
+        timed_input = TimedIterable(
+            module.inputdata,
+            timings,
+            timings_cpu,
+        )
+        module.inputdata = timed_input
 
     # Measure the explicit transformation functions.
     module.extractdomaininfo = timed_function(
@@ -240,8 +261,18 @@ def profile(implementation):
         timings_cpu,
     )
 
-    # The database-source implementation also closes two source
-    # connections in main().
+    # The database-source implementation closes two long-lived source
+    # connections explicitly in main(), as a separate step after all rows
+    # are processed -- that's what this wrapping times.
+    #
+    # The async extraction script's source connections are opened AND
+    # closed inside fetch_all(), entirely within the extraction step, for
+    # each call. That overhead is already inside whatever run_extraction()
+    # measures as "extraction_merge" above, not a separate "connection_close"
+    # cost -- so this wrapping only applies to "database", not
+    # "database_async_extract". This is a genuine structural difference
+    # between the two scripts' phase breakdowns, not an oversight: don't
+    # read "connection_close" as apples-to-apples between them.
     if implementation == "database":
         module.sourceconn1 = TimedProxy(
             module.sourceconn1,
@@ -301,9 +332,14 @@ def profile(implementation):
         for name in timings
     }
 
+    if timed_input is not None:
+        rows = timed_input.rows
+    else:
+        rows = module._last_extraction_row_count
+
     result = {
         "implementation": implementation,
-        "rows": timed_input.rows,
+        "rows": rows,
         "total_profiled_wall_seconds": total_profiled_wall,
         "total_profiled_cpu_seconds": total_profiled_cpu,
         "timings": timings,
