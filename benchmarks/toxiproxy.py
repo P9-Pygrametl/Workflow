@@ -100,16 +100,27 @@ def ensure_proxy():
     )
 
     if existing is not None:
-        upstream = json.loads(existing)["upstream"]
+        proxy = json.loads(existing)
+        upstream = proxy["upstream"]
+        listen = proxy["listen"]
+
         if upstream != PROXY_UPSTREAM:
             raise RuntimeError(
                 f"Proxy {TOXIPROXY_PROXY!r} already exists with upstream "
                 f"{upstream!r}, expected {PROXY_UPSTREAM!r}."
             )
-        return
+
+        normalized_listen = listen.replace("[::]", "0.0.0.0")
+        if normalized_listen != PROXY_LISTEN:
+            raise RuntimeError(
+                f"Proxy {TOXIPROXY_PROXY!r} already exists with listen "
+                f"{listen!r}, expected {PROXY_LISTEN!r}."
+            )
+        
+        return proxy
 
     print(f"Creating Toxiproxy proxy {TOXIPROXY_PROXY!r}...")
-    toxiproxy_request(
+    created = toxiproxy_request(
         "POST",
         "/proxies",
         {
@@ -119,15 +130,21 @@ def ensure_proxy():
         },
     )
 
+    try:
+        return json.loads(created)
+    except (json.JSONDecodeError, TypeError) as error:
+        raise RuntimeError(
+            f"Unexpected response while creating proxy "
+            f"{TOXIPROXY_PROXY!r}: {error}"
+        ) from error
+
 def setup_toxiproxy_routing():
     """Dynamically configure the environment to route through Toxiproxy."""
-    ensure_proxy()
-
-    response = toxiproxy_request("GET", f"/proxies/{TOXIPROXY_PROXY}")
+    proxy = ensure_proxy()
 
     try:
-        listen = json.loads(response)["listen"]
-    except (json.JSONDecodeError, KeyError) as error:
+        listen = proxy["listen"]
+    except (KeyError, TypeError) as error:
         raise RuntimeError(
             f"Unexpected response for proxy {TOXIPROXY_PROXY!r}: {error}"
         ) from error
