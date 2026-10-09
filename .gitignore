@@ -4,9 +4,12 @@
 .venv-t/
 __pycache__/
 *.py[cod]
+.vscode/
 DownloadLog.csv
 TestResults.csv
 settings.json
 datagenerator/params.py
 benchmarks/benchmark_results.csv
 benchmarks/benchmark_results.db
+/correctnessCheck/baselineCSV/*
+/correctnessCheck/nogilCSV/*
