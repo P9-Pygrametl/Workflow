@@ -40,8 +40,6 @@ except ValueError as error:
         f"DW_PORT must be an integer, got {DW_PORT_RAW!r}"
     ) from error
 
-BENCHMARK_SCRIPT = "cpygrametl1_db.py"
-
 PHASES = [
     "initialisation",
     "extraction_merge",
