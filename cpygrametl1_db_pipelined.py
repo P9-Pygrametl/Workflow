@@ -6,6 +6,7 @@ import psycopg
 import pygrametl
 from dotenv import load_dotenv
 
+from pygrametl import ConnectionWrapper, PipelinedConnectionWrapper
 from pygrametl.datasources import MergeJoiningSource, SQLSource
 from pygrametl.tables import (
     BulkFactTable,
@@ -13,40 +14,32 @@ from pygrametl.tables import (
     SlowlyChangingDimension,
 )
 
+
 load_dotenv()
 
 
-class PipelinedConnectionWrapper(pygrametl.ConnectionWrapper):
-    def __init__(self, connection, **kw):
-        super().__init__(connection, **kw)
-        self._ctx = connection.pipeline()
-        self._pipe = self._ctx.__enter__()
-
-    def execute(self, stmt, *a, **k):
-        super().execute(stmt, *a, **k)
-        if stmt.lstrip()[:6].upper() == "SELECT":
-            self._pipe.sync()
-
-    def commit(self):
-        self._pipe.sync()
-        super().commit()
-
-    def close(self):
-        # Gracefully shut down the pipeline before closing the socket
-        try:
-            self._ctx.__exit__(None, None, None)
-        except Exception:
-            pass
-        super().close()
-
-
 def datehandling(row, namemapping):
+    # This method is called from ensure(row) when the lookup of a date fails.
+    # We have to calculate all date related fields and add them to the row.
     date = pygrametl.getvalue(row, "date", namemapping)
+
     (
-        year, month, day, hour, minute, second, weekday, dayinyear, dst,
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        weekday,
+        dayinyear,
+        dst,
     ) = time.strptime(date, "%Y-%m-%d")
 
-    isoyear, isoweek, isoweekday = datetime.date(year, month, day).isocalendar()
+    isoyear, isoweek, isoweekday = datetime.date(
+        year,
+        month,
+        day,
+    ).isocalendar()
 
     row["day"] = day
     row["month"] = month
@@ -59,12 +52,16 @@ def datehandling(row, namemapping):
 
 
 def extractdomaininfo(row):
+    # Take the 'www.domain.org' part from 'http://www.domain.org/page.html'.
     domaininfo = row["url"].split("/")[-2]
     row["domain"] = domaininfo
+
+    # Take the top level which is the last part of the domain.
     row["topleveldomain"] = domaininfo.split(".")[-1]
 
 
 def extractserverinfo(row):
+    # Find the server name from a string like "ServerName/Version".
     row["server"] = row["serverversion"].split("/")[0]
 
 
@@ -79,59 +76,86 @@ def create_etl():
 
     try:
         source_port = int(source_port_value)
+    except ValueError:
+        raise ValueError(
+            f"SOURCE_PORT must be an integer, got {source_port_value!r}"
+        )
+
+    try:
         dw_port = int(dw_port_value)
-    except ValueError as e:
-        raise ValueError(f"Port must be an integer: {e}")
+    except ValueError:
+        raise ValueError(
+            f"DW_PORT must be an integer, got {dw_port_value!r}"
+        )
 
     # Connection to target DW
     pgconn = psycopg.connect(
-        host=dw_host, port=dw_port, dbname=dw_database, user=username,
+        host=dw_host,
+        port=dw_port,
+        dbname=dw_database,
+        user=username,
     )
 
-    # Use the Pipelined Wrapper instead of the standard ConnectionWrapper
     connection = PipelinedConnectionWrapper(pgconn)
     connection.setasdefault()
     connection.execute("SET search_path TO pygrametlexa")
 
     # Connections to source database
     sourceconn1 = psycopg.connect(
-        host=source_host, port=source_port, dbname=source_database, user=username,
-    )
-    sourceconn2 = psycopg.connect(
-        host=source_host, port=source_port, dbname=source_database, user=username,
+        host=source_host,
+        port=source_port,
+        dbname=source_database,
+        user=username,
     )
 
-    def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filehandle):
-        # 1. Fully exit pipeline mode (this automatically syncs pending writes)
-        connection._ctx.__exit__(None, None, None)
-        
+    sourceconn2 = psycopg.connect(
+        host=source_host,
+        port=source_port,
+        dbname=source_database,
+        user=username,
+    )
+
+    def pgcopybulkloader(
+        name,
+        atts,
+        fieldsep,
+        rowsep,
+        nullval,
+        filehandle,
+    ):
         sql = (
             f"COPY {name}({', '.join(atts)}) FROM STDIN "
             f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
         )
-        raw = getattr(filehandle, "buffer", filehandle)
-        with pgconn.cursor().copy(sql) as copy:
-            for chunk in iter(lambda: raw.read(1 << 20), b""):
-                copy.write(chunk)
-                
-        # 2. Re-enter pipeline mode for any subsequent dimension writes
-        connection._ctx = pgconn.pipeline()
-        connection._pipe = connection._ctx.__enter__()
+        raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
 
+        with connection.suspended_pipeline():
+            with pgconn.cursor().copy(sql) as copy:
+                for chunk in iter(lambda: raw.read(1 << 20), b""):
+                    copy.write(chunk)
+
+    # Dimension and fact table objects
     pagedim = SlowlyChangingDimension(
         name="page",
         key="pageid",
         attributes=[
-            "url", "size", "domain", "topleveldomain",
-            "serverversion", "server", "validfrom", "validto", "version",
+            "url",
+            "size",
+            "domain",
+            "topleveldomain",
+            "serverversion",
+            "server",
+            "validfrom",
+            "validto",
+            "version",
         ],
         lookupatts=["url"],
         versionatt="version",
         fromatt="validfrom",
         toatt="validto",
         srcdateatt="lastmoddate",
-        cachesize=1000,
-        prefill=False,
+        cachesize=-1,
+        prefill=True,
     )
 
     testdim = CachedDimension(
@@ -139,15 +163,24 @@ def create_etl():
         key="testid",
         attributes=["testname", "testauthor"],
         lookupatts=["testname"],
+        prefill=True,
         defaultidvalue=-1,
     )
 
     datedim = CachedDimension(
         name="date",
         key="dateid",
-        attributes=["date", "day", "month", "year", "week", "weekyear"],
+        attributes=[
+            "date",
+            "day",
+            "month",
+            "year",
+            "week",
+            "weekyear",
+        ],
         lookupatts=["date"],
         rowexpander=datehandling,
+        prefill=True,
     )
 
     facttbl = BulkFactTable(
@@ -158,12 +191,19 @@ def create_etl():
         bulksize=250000,
     )
 
+    # Data sources
     downloadlog = SQLSource(
         connection=sourceconn1,
         query="""
-            SELECT localfile, url, serverversion, size::text AS size,
-                   downloaddate::text AS downloaddate, lastmoddate::text AS lastmoddate
-            FROM downloadlog ORDER BY localfile
+            SELECT
+                localfile,
+                url,
+                serverversion,
+                size::text AS size,
+                downloaddate::text AS downloaddate,
+                lastmoddate::text AS lastmoddate
+            FROM downloadlog
+            ORDER BY localfile
         """,
         cursorarg="downloadlog_cursor",
         fetchsize=5000,
@@ -172,35 +212,67 @@ def create_etl():
     testresults = SQLSource(
         connection=sourceconn2,
         query="""
-            SELECT localfile, test, errors::text AS errors
-            FROM testresults ORDER BY localfile, test
+            SELECT
+                localfile,
+                test,
+                errors::text AS errors
+            FROM testresults
+            ORDER BY localfile, test
         """,
         cursorarg="testresults_cursor",
         fetchsize=5000,
     )
 
-    inputdata = MergeJoiningSource(downloadlog, "localfile", testresults, "localfile")
+    inputdata = MergeJoiningSource(
+        downloadlog,
+        "localfile",
+        testresults,
+        "localfile",
+    )
 
     return (
-        connection, sourceconn1, sourceconn2, inputdata, pagedim, datedim, testdim, facttbl,
+        connection,
+        sourceconn1,
+        sourceconn2,
+        inputdata,
+        pagedim,
+        datedim,
+        testdim,
+        facttbl,
     )
 
 
 def run_etl(
-    connection, sourceconn1, sourceconn2, inputdata, pagedim, datedim, testdim, facttbl,
-    extract_domain=extractdomaininfo, extract_server=extractserverinfo, get_int=pygrametl.getint,
+    connection,
+    sourceconn1,
+    sourceconn2,
+    inputdata,
+    pagedim,
+    datedim,
+    testdim,
+    facttbl,
+    extract_domain=extractdomaininfo,
+    extract_server=extractserverinfo,
+    get_int=pygrametl.getint,
 ):
-    print("Start:", time.asctime())
+    print(time.asctime())
 
     try:
         for row in inputdata:
             extract_domain(row)
             extract_server(row)
+
             row["size"] = get_int(row["size"])
 
             row["pageid"] = pagedim.scdensure(row)
-            row["dateid"] = datedim.ensure(row, {"date": "downloaddate"})
-            row["testid"] = testdim.lookup(row, {"testname": "test"})
+            row["dateid"] = datedim.ensure(
+                row,
+                {"date": "downloaddate"},
+            )
+            row["testid"] = testdim.lookup(
+                row,
+                {"testname": "test"},
+            )
 
             facttbl.insert(row)
 
@@ -211,7 +283,7 @@ def run_etl(
         sourceconn2.close()
         connection.close()
 
-    print("End:", time.asctime())
+    print(time.asctime())
 
 
 def main():
