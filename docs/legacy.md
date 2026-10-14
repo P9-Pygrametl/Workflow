@@ -34,6 +34,16 @@ hash -r
 sudo /opt/jython/bin/pip-jython install "pygrametl==2.6"
 ```
 
+If pygrametl runs locally on machine.
+```bash
+yay -S jython postgresql-jdbc
+
+sudo ln -s /opt/jython/bin/jython /usr/local/bin/jython
+hash -r
+
+sudo cp -r /path/to/your/local/pygrametl /opt/jython/Lib/site-packages/
+```
+
 Edit the username referenced in `pygrametl1.py`, then generate the CSV source
 data, apply the schema, and run:
 

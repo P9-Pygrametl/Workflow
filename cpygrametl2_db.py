@@ -8,7 +8,7 @@ import pygrametl
 
 load_dotenv()
 
-from pygrametl import PicklableConnectionWrapper
+from pygrametl.nogil import PicklableConnectionWrapper, PicklableSQLSource
 from pygrametl.datasources import (
     MergeJoiningSource,
     SQLSource,
@@ -181,7 +181,7 @@ def create_etl():
         returnvalues=False,
     )
 
-    downloadlog = SQLSource(
+    downloadlog = PicklableSQLSource(
         connection=sourceconn1,
         query="""
             SELECT 
@@ -198,7 +198,7 @@ def create_etl():
         fetchsize=5000,
     )
 
-    testresults = SQLSource(
+    testresults = PicklableSQLSource(
         connection=sourceconn2,
         query="""
             SELECT 
