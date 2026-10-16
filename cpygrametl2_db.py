@@ -245,15 +245,10 @@ def run_etl(
     datedim,
     testdim,
     facttbl,
-    extract_domain=extractdomaininfo,
-    extract_server=extractserverinfo,
     get_int=pygrametl.getint,
 ):
-    print(time.asctime())
     try:
         for row in inputdata:
-            extract_domain(row)
-            extract_server(row)
             row["size"] = get_int(row["size"])
 
             fact = {"errors": row["errors"]}
@@ -279,7 +274,6 @@ def run_etl(
         sourceconn2.close()
         shrdconn.close()
 
-    print(time.asctime())
 
 
 def main():
