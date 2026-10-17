@@ -22,11 +22,10 @@ from cpygrametl2_db import (
     run_etl,
 )
 from datagenerator.datagenerator_db import generate
-
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-PAGES = 20  # Define the workload scale (number of pages to generate)
+PAGES = 25  # Define the workload scale (number of pages to generate)
 # ==============================================================================
 
 # Load environment variables from the repository root

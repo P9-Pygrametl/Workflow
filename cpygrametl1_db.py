@@ -213,8 +213,6 @@ def run_etl(
     extract_server=extractserverinfo,
     get_int=pygrametl.getint,
 ):
-    print(time.asctime())
-
     try:
         for row in inputdata:
             extract_domain(row)
@@ -240,9 +238,6 @@ def run_etl(
         sourceconn1.close()
         sourceconn2.close()
         connection.close()
-
-    print(time.asctime())
-
 
 def main():
     etl = create_etl()
