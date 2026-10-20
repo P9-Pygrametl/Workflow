@@ -22,7 +22,8 @@ For arch:
 - cd ..
 - python3.14t -m venv .vent-t
 - source .venv/bin/active
-- pip install /path/to/pygrametl
+- Remember to have your local pygrametl on the NoGIL branch
+- pip install -e /path/to/pygrametl 
 - pip install -r requirements.txt
 - python3 benchmark/simple_bench.py
 
