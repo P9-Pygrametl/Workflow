@@ -14,6 +14,18 @@ inspecting benchmark results.
 - Docker with the Compose plugin
 - Python 3 with `venv`
 
+
+## NoGIL Requirements
+For arch:
+- cd NoGIL
+- makepkg -si
+- cd ..
+- python3.14t -m venv .vent-t
+- source .venv/bin/active
+- pip install /path/to/pygrametl
+- pip install -r requirements.txt
+- python3 benchmark/simple_bench.py
+
 ## Setup
 
 Create your local environment file and set `USERNAME` to your system user:

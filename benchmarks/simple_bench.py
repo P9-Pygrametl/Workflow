@@ -25,7 +25,7 @@ from datagenerator.datagenerator_db import generate
 # ==============================================================================
 # CONFIGURATION
 # ==============================================================================
-PAGES = 25  # Define the workload scale (number of pages to generate)
+PAGES = 100  # Define the workload scale (number of pages to generate)
 # ==============================================================================
 
 # Load environment variables from the repository root
