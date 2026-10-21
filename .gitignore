@@ -5,6 +5,7 @@
 __pycache__/
 *.py[cod]
 .vscode/
+*$py.class
 DownloadLog.csv
 TestResults.csv
 settings.json

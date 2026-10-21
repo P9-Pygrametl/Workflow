@@ -1,3 +1,4 @@
+import argparse
 import io
 import os
 import random
@@ -261,3 +262,25 @@ def generate(pages=None):
 
     finally:
         connection.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Generate source data in the PostgreSQL source database."
+    )
+    parser.add_argument(
+        "--pages",
+        type=int,
+        default=None,
+        help=(
+            "Number of pages per domain. Defaults to the generator "
+            "configuration (100)."
+        ),
+    )
+    args = parser.parse_args()
+
+    generate(args.pages)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,25 +1,38 @@
 import datetime
-import sys
+import os
 import time
 
 import java.lang.Class
 import java.sql.DriverManager
 
 
-sys.path.append('/home/chr/code') # where pygrametl is installed
 import pygrametl
-from pygrametl.JDBCConnectionWrapper import JDBCConnectionWrapper
+from jython_dw import (
+    downloadlog_source,
+    loadenv,
+    reset_warehouse,
+    testresults_source,
+)
 from pygrametl.JDBCConnectionWrapper import BackgroundJDBCConnectionWrapper
-from pygrametl.datasources import CSVSource, MergeJoiningSource
-from pygrametl.tables import CachedDimension, SnowflakedDimension,\
-    SlowlyChangingDimension, BulkFactTable
+from pygrametl.datasources import MergeJoiningSource
+from pygrametl.tables import CachedDimension, SlowlyChangingDimension,\
+    BulkFactTable
+
+
+loadenv()
 
 
 # Connection to target DW:
+dwhost = os.environ.get('DW_HOST', 'localhost')
+dwport = os.environ.get('DW_PORT', '55433')
+dwdb = os.environ.get('DW_DATABASE', 'pygrametl_dw')
+dwuser = os.environ.get('USERNAME', 'mertz')
+
 java.lang.Class.forName("org.postgresql.Driver")
 pgconn = java.sql.DriverManager.getConnection \
-         ("jdbc:postgresql://localhost/bech?user=bech")
+         ("jdbc:postgresql://%s:%s/%s?user=%s" % (dwhost, dwport, dwdb, dwuser))
 pgconn.setAutoCommit(False)
+reset_warehouse(pgconn)
 connection = BackgroundJDBCConnectionWrapper(pgconn)
 connection.setasdefault()
 connection.execute('set search_path to pygrametlexa')
@@ -105,11 +118,8 @@ facttbl = BulkFactTable(
 
 
 # Data sources
-downloadlog = CSVSource(file('DownloadLog.csv', 'r', 16384),
-                        delimiter='\t')
-
-testresults = CSVSource(file('TestResults.csv', 'r', 16384),
-                        delimiter='\t')
+downloadlog = downloadlog_source()
+testresults = testresults_source()
 
 inputdata = MergeJoiningSource(downloadlog, 'localfile', testresults,
                                'localfile')
