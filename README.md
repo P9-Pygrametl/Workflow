@@ -89,7 +89,7 @@ docker compose down -v     # also delete the source and warehouse volumes
 The generated source and warehouse data live in the `source_pgdata` and
 `dw_pgdata` volumes and survive a plain `down`.
 
-## Legacy pipelines
+## Legacy pipeline
 
-Older Jython and CSV-based pipelines are kept for comparison only and are
-documented separately in [`docs/legacy.md`](docs/legacy.md).
+The original Jython pygrametl pipeline is kept for comparison only and is
+documented separately in [`jython/README.md`](jython/README.md).

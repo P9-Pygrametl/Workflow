@@ -16,42 +16,63 @@
 
 
 import datetime
-import sys
+import os
 import time
 
-# Depending on your system you might have to do something like this
-# where you append the path where pygrametl is installed
-sys.path.append('/home/chr/code/') 
 
 import pygrametl
+from jython_dw import (
+    downloadlog_source,
+    loadenv,
+    reset_warehouse,
+    testresults_source,
+)
 from pygrametl.JDBCConnectionWrapper import JDBCConnectionWrapper
-from pygrametl.datasources import CSVSource, MergeJoiningSource, ProcessSource,\
+from pygrametl.datasources import MergeJoiningSource, ProcessSource,\
     TransformingSource
-from pygrametl.tables import CachedDimension, SnowflakedDimension,\
-    SlowlyChangingDimension, BulkFactTable, FactTable, \
-    DecoupledDimension, DecoupledFactTable, DimensionPartitioner
+from pygrametl.tables import CachedDimension, SlowlyChangingDimension,\
+    BulkFactTable, DecoupledDimension, DecoupledFactTable,\
+    DimensionPartitioner
 from pygrametl.parallel import shareconnectionwrapper,\
      getsharedsequencefactory
 
 import java.lang
 
 
-BATCHSIZE = 500
+loadenv()
+
+
+BATCHSIZE = int(os.environ.get('JYTHON_BATCHSIZE', '500'))
+QUEUESIZE = int(os.environ.get('JYTHON_QUEUESIZE', '10'))
+PAGE_PARTS = int(os.environ.get('JYTHON_PAGE_PARTS', '2'))
+CACHESIZE = int(os.environ.get('JYTHON_CACHESIZE', '-1'))
+PROCESS_BATCHSIZE = int(
+    os.environ.get('JYTHON_PROCESS_BATCHSIZE', str(BATCHSIZE))
+)
+PROCESS_QUEUESIZE = int(
+    os.environ.get('JYTHON_PROCESS_QUEUESIZE', str(QUEUESIZE))
+)
 
 
 def pgbulkloader(name, atts, fieldsep, rowsep, nullval, filename):
-    filehandle = open(filename, 'r')
     sql = "COPY %s(%s) FROM STDIN WITH DELIMITER '%s'" %\
           (name, ', '.join(atts), fieldsep)
     global rawconn
     copymgr = rawconn.getCopyAPI()
-    copymgr.copyIn(sql, filehandle)
+    with open(filename, 'r') as filehandle:
+        copymgr.copyIn(sql, filehandle)
 
 # Connection to target DW:
+dwhost = os.environ.get('DW_HOST', 'localhost')
+dwport = os.environ.get('DW_PORT', '55433')
+dwdb = os.environ.get('DW_DATABASE', 'pygrametl_dw')
+dwuser = os.environ.get('USERNAME', 'mertz')
+
 java.lang.Class.forName("org.postgresql.Driver")
 rawconn = java.sql.DriverManager.getConnection \
-         ("jdbc:postgresql://localhost/bech?user=bech")
+         ("jdbc:postgresql://%s:%s/%s?user=%s" % (dwhost, dwport, dwdb, dwuser))
 rawconn.setAutoCommit(False)
+reset_warehouse(rawconn)
 shrdconn = shareconnectionwrapper(JDBCConnectionWrapper(rawconn), 10,
                                    (pgbulkloader,))
 shrdconn.execute('set search_path to pygrametlexa')
@@ -95,9 +116,8 @@ def convertsize(row):
 # Dimension and fact table objects
 
 def getpagediminstances():
-    global shrdconn
     idfactory = getsharedsequencefactory(0)
-    for i in range(2):
+    for i in range(PAGE_PARTS):
         yield DecoupledDimension(
             SlowlyChangingDimension(
             name='page', 
@@ -110,11 +130,11 @@ def getpagediminstances():
             fromatt='validfrom',
             toatt='validto', 
             srcdateatt='lastmoddate', 
-            cachesize=-1,
+            cachesize=CACHESIZE,
             prefill=True,
             idfinder=idfactory(),
             targetconnection=shrdconn.copy()),
-            batchsize=BATCHSIZE, queuesize=10
+            batchsize=BATCHSIZE, queuesize=QUEUESIZE
             )
 
 pagedim = DimensionPartitioner([pd for pd in getpagediminstances()])
@@ -145,19 +165,15 @@ facttbl = DecoupledFactTable(
         bulksize=250000,
         bulkloader=shrdconn.copy().pgbulkloader,
         usefilename=True),
-    batchsize=BATCHSIZE, queuesize=10,
+    batchsize=BATCHSIZE, queuesize=QUEUESIZE,
     consumes=pagedim.parts,
     returnvalues=False
     )
 
 
-# Data sources - change the path if you have your files somewhere else
-downloadlog = CSVSource(file('DownloadLog.csv', 'r'),
-                        delimiter='\t')
-    
-
-testresults = CSVSource(file('TestResults.csv', 'r'),
-                        delimiter='\t')
+# Data sources
+downloadlog = downloadlog_source()
+testresults = testresults_source()
 
 
 joineddata = MergeJoiningSource(downloadlog, 'localfile', testresults,
@@ -167,16 +183,27 @@ transformeddata = TransformingSource(joineddata, extractdomaininfo,
                                      extractserverinfo, convertsize)
 
 
-inputdata = ProcessSource(transformeddata, batchsize=BATCHSIZE, queuesize=10)
+inputdata = ProcessSource(transformeddata,
+                          batchsize=PROCESS_BATCHSIZE,
+                          queuesize=PROCESS_QUEUESIZE)
 
 def main():
-    for row in inputdata:
-        fact = {'errors':row['errors']}
-        fact['pageid'] = pagedim.scdensure(row)
-        fact['dateid'] = datedim.ensure(row, {'date':'downloaddate'})
-        fact['testid'] = testdim.lookup(row, {'testname':'test'})
-        facttbl.insert(fact)
-    shrdconn.commit()
+    try:
+        for row in inputdata:
+            fact = {'errors':row['errors']}
+            fact['pageid'] = pagedim.scdensure(row)
+            fact['dateid'] = datedim.ensure(row, {'date':'downloaddate'})
+            fact['testid'] = testdim.lookup(row, {'testname':'test'})
+            facttbl.insert(fact)
+        shrdconn.commit()
+    finally:
+        # Jython runs pygrametl 2.6, where shutdown is explicit.
+        try:
+            facttbl.shutdowndecoupled()
+            for part in pagedim.parts:
+                part.shutdowndecoupled()
+        finally:
+            shrdconn.close()
 
 if __name__ == '__main__':
     main()

@@ -1,8 +1,10 @@
 .env
 /data
 .venv/
+.jython_cache/
 __pycache__/
 *.py[cod]
+*$py.class
 DownloadLog.csv
 TestResults.csv
 settings.json
