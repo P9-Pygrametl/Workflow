@@ -66,7 +66,7 @@ def create_etl():
     def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filename):
         sql = (
             f"COPY {name}({', '.join(atts)}) FROM STDIN "
-            f"WI- Remember to have your local pygrametl on the NoGIL branchTH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
+            f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
         )
         with open(filename, "rb") as f, pgconn.cursor().copy(sql) as copy:
             for chunk in iter(lambda: f.read(1 << 20), b""):

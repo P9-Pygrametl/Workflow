@@ -13,7 +13,7 @@ import psycopg
 import psutil
 import pygrametl
 from benchmarks.timing import TimedIterable, TimedProxy, wrap_with_timing
-from Shared.cpygrametl2_db import (
+from shared.cpygrametl2_db import (
     create_etl,
     run_etl,
 )
