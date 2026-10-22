@@ -1,3 +1,4 @@
+import inspect
 import time
 
 
@@ -13,6 +14,10 @@ def wrap_with_timing(
     Python CPU time. The measurements are added to the supplied timing
     dictionaries under timing_name.
 
+    Coroutine functions are supported: the returned wrapper is then also
+    a coroutine function, and the timing covers the awaited execution
+    rather than only the creation of the coroutine.
+
     Timing is recorded even if the wrapped function raises an exception.
 
     Args:
@@ -24,6 +29,23 @@ def wrap_with_timing(
     Returns:
         A wrapped version of the supplied function.
     """
+    if inspect.iscoroutinefunction(function):
+        async def async_wrapper(*args, **kwargs):
+            wall_start = time.perf_counter()
+            cpu_start = time.process_time()
+
+            try:
+                return await function(*args, **kwargs)
+            finally:
+                timings[timing_name] += (
+                    time.perf_counter() - wall_start
+                )
+                timings_cpu[timing_name] += (
+                    time.process_time() - cpu_start
+                )
+
+        return async_wrapper
+
     def wrapper(*args, **kwargs):
         wall_start = time.perf_counter()
         cpu_start = time.process_time()

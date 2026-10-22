@@ -1,3 +1,5 @@
+import asyncio
+import inspect
 import time
 
 from cpygrametl1_db import (
@@ -16,22 +18,20 @@ from benchmarks.timing import (
 import pygrametl
 
 
-def profile():
-    """Profile the ETL execution by phase.
+async def _maybe_await(value):
+    """Await the value if it is awaitable, otherwise return it unchanged.
 
-    The ETL components are wrapped so that selected operations accumulate
-    wall-clock and Python CPU time for their corresponding phases. Time
-    not attributed to an explicitly measured phase is recorded as
-    ``other``.
-
-    Waiting time for each phase is estimated as the difference between
-    wall-clock and Python CPU time.
-
-    Returns:
-        A dictionary containing the processed row count, total profiled
-        wall-clock and CPU times, and per-phase wall-clock, CPU, and
-        estimated waiting times.
+    This lets the profiler work with both the synchronous and the
+    asynchronous version of the workflow.
     """
+    if inspect.isawaitable(value):
+        return await value
+
+    return value
+
+
+async def _profile():
+    """Profile the ETL execution by phase inside a single event loop."""
     timings = {
         "initialisation": 0.0,
         "extraction_merge": 0.0,
@@ -62,7 +62,7 @@ def profile():
         datedim,
         testdim,
         facttbl,
-    ) = create_etl()
+    ) = await _maybe_await(create_etl())
 
     timings["initialisation"] = (
         time.perf_counter() - wall_start
@@ -167,18 +167,20 @@ def profile():
     wall_start = time.perf_counter()
     cpu_start = time.process_time()
 
-    run_etl(
-        timed_connection,
-        timed_sourceconn1,
-        timed_sourceconn2,
-        timed_input,
-        timed_pagedim,
-        timed_datedim,
-        timed_testdim,
-        timed_facttbl,
-        extract_domain=timed_extractdomaininfo,
-        extract_server=timed_extractserverinfo,
-        get_int=timed_getint,
+    await _maybe_await(
+        run_etl(
+            timed_connection,
+            timed_sourceconn1,
+            timed_sourceconn2,
+            timed_input,
+            timed_pagedim,
+            timed_datedim,
+            timed_testdim,
+            timed_facttbl,
+            extract_domain=timed_extractdomaininfo,
+            extract_server=timed_extractserverinfo,
+            get_int=timed_getint,
+        )
     )
 
     etl_wall_seconds = time.perf_counter() - wall_start
@@ -273,3 +275,26 @@ def profile():
     )
 
     return result
+
+
+def profile():
+    """Profile the ETL execution by phase.
+
+    The ETL components are wrapped so that selected operations accumulate
+    wall-clock and Python CPU time for their corresponding phases. Time
+    not attributed to an explicitly measured phase is recorded as
+    ``other``.
+
+    Waiting time for each phase is estimated as the difference between
+    wall-clock and Python CPU time.
+
+    Works with both the synchronous and the asynchronous workflow. The
+    whole run happens inside one event loop, so objects created in
+    create_etl can be used by run_etl.
+
+    Returns:
+        A dictionary containing the processed row count, total profiled
+        wall-clock and CPU times, and per-phase wall-clock, CPU, and
+        estimated waiting times.
+    """
+    return asyncio.run(_profile())
