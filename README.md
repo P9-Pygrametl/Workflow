@@ -17,14 +17,11 @@ inspecting benchmark results.
 
 ## NoGIL Requirements
 For arch:
-- cd NoGIL
-- makepkg -si
-- cd ..
-- python3.14t -m venv .vent-t
-- source .venv/bin/active
-- pip install -e /path/to/pygrametl 
-- pip install -r requirements.txt
-- python3 benchmark/simple_bench.py
+- uv python install 3.14t
+- uv venv --python 3.14t .venv-t
+- uv pip install --python .venv-t/bin/python -e /path/to/pygrametl
+- uv pip install --python .venv-t/bin/python -r requirements.txt
+- .venv-t/bin/python benchmarks/simple_bench.py
 
 ## Setup
 

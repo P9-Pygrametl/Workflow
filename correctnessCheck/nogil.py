@@ -13,7 +13,6 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from pygrametl import ConnectionWrapper
-from pygrametl.nogil import PicklableConnectionWrapper
 from pygrametl.datasources import (
     CSVSource,
     MergeJoiningSource,
@@ -199,16 +198,12 @@ def run_etl(
     testdim,
     facttbl,
     export_dw_to_csv,
-    extract_domain=extractdomaininfo,
-    extract_server=extractserverinfo,
     get_int=pygrametl.getint,
 ):
     print(time.asctime())
 
     try:
         for row in inputdata:
-            extract_domain(row)
-            extract_server(row)
 
             row["size"] = get_int(row["size"])
 
