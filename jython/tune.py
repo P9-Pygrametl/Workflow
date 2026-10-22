@@ -137,8 +137,7 @@ def summarize(results):
     if failed:
         print("\nFailed runs: %d" % len(failed))
 
-
-def main():
+def parse_args():
     parser = argparse.ArgumentParser(
         description="Measure Jython heap and GC configurations."
     )
@@ -161,8 +160,11 @@ def main():
     parser.add_argument("--jdbc-jar", type=Path, default=Path(DEFAULT_JDBC_JAR))
     parser.add_argument("--skip-generate", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
+    return parser.parse_args()
+    
 
+def main():
+    args = parse_args()
     script = (ROOT / args.script).resolve()
     output = (ROOT / args.output).resolve()
 
