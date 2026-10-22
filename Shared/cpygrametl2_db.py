@@ -1,6 +1,4 @@
-import datetime
 import os
-import time
 
 from dotenv import load_dotenv
 import psycopg
@@ -28,46 +26,14 @@ from pygrametl.tables import (
     SlowlyChangingDimension,
 )
 
+from helpers.helpers import (
+    convertsize,
+    datehandling,
+    extractdomaininfo,
+    extractserverinfo,
+)
+
 BATCHSIZE = 500
-
-def datehandling(row, namemapping):
-    date = pygrametl.getvalue(row, "date", namemapping)
-    (
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        weekday,
-        dayinyear,
-        dst,
-    ) = time.strptime(date, "%Y-%m-%d")
-    isoyear, isoweek, isoweekday = datetime.date(
-        year, month, day
-    ).isocalendar()
-    row["day"] = day
-    row["month"] = month
-    row["year"] = year
-    row["week"] = isoweek
-    row["weekyear"] = isoyear
-    row["dateid"] = dayinyear + 366 * (year - 1990)
-    return row
-
-
-def extractdomaininfo(row):
-    domaininfo = row["url"].split("/")[-2]
-    row["domain"] = domaininfo
-    row["topleveldomain"] = domaininfo.split(".")[-1]
-
-
-def extractserverinfo(row):
-    row["server"] = row["serverversion"].split("/")[0]
-
-
-def convertsize(row):
-    row["size"] = pygrametl.getint(row["size"])
-
 
 def create_etl():
     username = os.getenv("USERNAME")
@@ -100,7 +66,7 @@ def create_etl():
     def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filename):
         sql = (
             f"COPY {name}({', '.join(atts)}) FROM STDIN "
-            f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
+            f"WI- Remember to have your local pygrametl on the NoGIL branchTH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
         )
         with open(filename, "rb") as f, pgconn.cursor().copy(sql) as copy:
             for chunk in iter(lambda: f.read(1 << 20), b""):
