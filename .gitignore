@@ -1,9 +1,11 @@
 .env
 /data
 .venv/
-.jython_cache/
+.venv-t/
 __pycache__/
 *.py[cod]
+.vscode/
+.jython_cache/
 *$py.class
 DownloadLog.csv
 TestResults.csv
@@ -11,3 +13,5 @@ settings.json
 datagenerator/params.py
 benchmarks/benchmark_results.csv
 benchmarks/benchmark_results.db
+/correctness_check/baselineCSV/*
+/correctness_check/nogilCSV/*

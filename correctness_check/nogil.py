@@ -1,18 +1,22 @@
-import datetime
 import os
+from pathlib import Path
+import sys
 import time
 
 from dotenv import load_dotenv
 import psycopg
 import pygrametl
 
-load_dotenv()
+ROOT = Path(__file__).resolve().parent.parent
+
+# Allow imports from the repository root when running this file directly.
+sys.path.insert(0, str(ROOT))
 
 from pygrametl import ConnectionWrapper
 from pygrametl.datasources import (
+    CSVSource,
     MergeJoiningSource,
     ProcessSource,
-    SQLSource,
     TransformingSource,
 )
 from pygrametl.parallel import (
@@ -28,107 +32,55 @@ from pygrametl.tables import (
     SlowlyChangingDimension,
 )
 
+from helpers.helpers import (
+    convertsize,
+    datehandling,
+    extractdomaininfo,
+    extractserverinfo,
+)
+
 BATCHSIZE = 500
-_connRef = []
-
-def datehandling(row, namemapping):
-    date = pygrametl.getvalue(row, "date", namemapping)
-    (
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        weekday,
-        dayinyear,
-        dst,
-    ) = time.strptime(date, "%Y-%m-%d")
-    isoyear, isoweek, isoweekday = datetime.date(
-        year, month, day
-    ).isocalendar()
-    row["day"] = day
-    row["month"] = month
-    row["year"] = year
-    row["week"] = isoweek
-    row["weekyear"] = isoyear
-    row["dateid"] = dayinyear + 366 * (year - 1990)
-    return row
+load_dotenv()
 
 
-def extractdomaininfo(row):
-    domaininfo = row["url"].split("/")[-2]
-    row["domain"] = domaininfo
-    row["topleveldomain"] = domaininfo.split(".")[-1]
+def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filename):
+    connection = pygrametl.getdefaulttargetconnection()
+    if connection is None:
+        raise RuntimeError("DW connection wrapper is not initialized")
 
-
-def extractserverinfo(row):
-    row["server"] = row["serverversion"].split("/")[0]
-
-
-def convertsize(row):
-    row["size"] = pygrametl.getint(row["size"])
+    sql = (
+        f"COPY {name}({', '.join(atts)}) FROM STDIN "
+        f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
+    )
+    with open(filename, "rb") as f, connection.cursor().copy(sql) as copy:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            copy.write(chunk)
 
 
 def create_etl():
     username = os.getenv("USERNAME")
-    source_database = os.getenv("SOURCE_DATABASE")
     dw_database = os.getenv("DW_DATABASE")
-    source_host = os.getenv("SOURCE_HOST", "localhost")
-    source_port_value = os.getenv("SOURCE_PORT", "5432")
     dw_host = os.getenv("DW_HOST", "localhost")
     dw_port_value = os.getenv("DW_PORT", "5432")
-
-    try:
-        source_port = int(source_port_value)
-    except ValueError:
-        raise ValueError(
-            f"SOURCE_PORT must be an integer, got {source_port_value!r}"
-        )
 
     try:
         dw_port = int(dw_port_value)
     except ValueError:
         raise ValueError(f"DW_PORT must be an integer, got {dw_port_value!r}")
 
+    # Connection to target DW
     pgconn = psycopg.connect(
         host=dw_host,
         port=dw_port,
         dbname=dw_database,
         user=username,
     )
-    pgconn.autocommit = False
-    _connRef.append(pgconn)
-
-    def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filename):
-        sql = (
-            f"COPY {name}({', '.join(atts)}) FROM STDIN "
-            f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
-        )
-        with open(filename, "rb") as f, pgconn.cursor().copy(sql) as copy:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                copy.write(chunk)
 
     shrdconn = shareconnectionwrapper(
         ConnectionWrapper(pgconn), 10, (pgcopybulkloader,)
     )
     shrdconn.execute("set search_path to pygrametlexa")
 
-    sourceconn1 = psycopg.connect(
-        host=source_host,
-        port=source_port,
-        dbname=source_database,
-        user=username,
-    )
-
-    sourceconn2 = psycopg.connect(
-        host=source_host,
-        port=source_port,
-        dbname=source_database,
-        user=username,
-    )
-
-    # Sequence factory is created local to this call run to ensure thread-safety
     idfactory = getsharedsequencefactory(0)
 
     def getpagediminstances():
@@ -199,89 +151,80 @@ def create_etl():
         returnvalues=False,
     )
 
-    downloadlog = SQLSource(
-        connection=sourceconn1,
-        query="""
-            SELECT 
-                localfile, 
-                url, 
-                serverversion, 
-                size::text AS size, 
-                downloaddate::text AS downloaddate, 
-                lastmoddate::text AS lastmoddate 
-            FROM downloadlog 
-            ORDER BY localfile
-        """,
-        cursorarg="downloadlog_cursor",
-        fetchsize=5000,
-    )
+    downloadlog = CSVSource(open("DownloadLog.csv", "r", 16384), delimiter="\t")
 
-    testresults = SQLSource(
-        connection=sourceconn2,
-        query="""
-            SELECT 
-                localfile, 
-                test, 
-                errors::text AS errors 
-            FROM testresults 
-            ORDER BY localfile, test
-        """,
-        cursorarg="testresults_cursor",
-        fetchsize=5000,
-    )
+    testresults = CSVSource(open("TestResults.csv", "r", 16384), delimiter="\t")
 
     joineddata = MergeJoiningSource(
         downloadlog, "localfile", testresults, "localfile"
     )
 
-    transformeddata = TransformingSource(joineddata, extractdomaininfo, 
-                                     extractserverinfo, convertsize)
+    transformeddata = TransformingSource(
+        joineddata, extractdomaininfo, extractserverinfo, convertsize
+    )
 
-    # ProcessSource will also spawn worker threads.
-    inputdata = ProcessSource(transformeddata, batchsize=BATCHSIZE, queuesize=10)
+    inputdata = ProcessSource(
+        transformeddata, batchsize=BATCHSIZE, queuesize=10
+    )
+
+    def export_dw_to_csv():
+        tables = ["page", "test", "date", "testresults"]
+        print("Exporting DW tables to CSV...")
+        for table in tables:
+            filename = f"./nogilCSV/{table}_export.csv"
+            sql = f"COPY pygrametlexa.{table} TO STDOUT WITH (FORMAT CSV, HEADER)"
+            with pgconn.cursor().copy(sql) as copy:
+                with open(filename, "wb") as f:
+                    for chunk in copy:
+                        f.write(chunk)
+            print(f"Saved: {filename}")
 
     return (
         shrdconn,
-        sourceconn1,
-        sourceconn2,
         inputdata,
         pagedim,
         datedim,
         testdim,
         facttbl,
+        export_dw_to_csv,
     )
 
 
 def run_etl(
     shrdconn,
-    sourceconn1,
-    sourceconn2,
     inputdata,
     pagedim,
     datedim,
     testdim,
     facttbl,
-    extract_domain=extractdomaininfo,
-    extract_server=extractserverinfo,
+    export_dw_to_csv,
     get_int=pygrametl.getint,
 ):
     print(time.asctime())
+
     try:
         for row in inputdata:
-            extract_domain(row)
-            extract_server(row)
+
             row["size"] = get_int(row["size"])
 
+            # Use a separate dictionary for the fact record
             fact = {"errors": row["errors"]}
             fact["pageid"] = pagedim.scdensure(row)
-            fact["dateid"] = datedim.ensure(row, {"date": "downloaddate"})
-            fact["testid"] = testdim.lookup(row, {"testname": "test"})
+            fact["dateid"] = datedim.ensure(
+                row,
+                {"date": "downloaddate"},
+            )
+            fact["testid"] = testdim.lookup(
+                row,
+                {"testname": "test"},
+            )
+
             facttbl.insert(fact)
 
         shrdconn.commit()
+
     finally:
-        # Explicitly close and join the processes of the decoupled tables
-        # before closing the core database connections.
+        # Flush and join decoupled dimension/fact table workers first
         try:
             pagedim.close()
         except Exception:
@@ -292,9 +235,17 @@ def run_etl(
         except Exception:
             pass
 
-        # Close all data sources and connections
-        sourceconn1.close()
-        sourceconn2.close()
+        try:
+            datedim.close()
+        except Exception:
+            pass
+
+        try:
+            testdim.close()
+        except Exception:
+            pass
+
+        export_dw_to_csv()
         shrdconn.close()
 
     print(time.asctime())

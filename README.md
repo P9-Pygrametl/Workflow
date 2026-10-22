@@ -14,6 +14,15 @@ inspecting benchmark results.
 - Docker with the Compose plugin
 - Python 3 with `venv`
 
+
+## NoGIL Requirements
+For arch:
+- uv python install 3.14t
+- uv venv --python 3.14t .venv-t
+- uv pip install --python .venv-t/bin/python -e /path/to/pygrametl
+- uv pip install --python .venv-t/bin/python -r requirements.txt
+- .venv-t/bin/python benchmarks/simple_bench.py
+
 ## Setup
 
 Create your local environment file and set `USERNAME` to your system user:

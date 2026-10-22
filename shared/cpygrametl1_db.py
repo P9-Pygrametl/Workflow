@@ -1,6 +1,4 @@
-import datetime
 import os
-import time
 
 import psycopg
 import pygrametl
@@ -14,56 +12,13 @@ from pygrametl.tables import (
     SlowlyChangingDimension,
 )
 
+from helpers.helpers import (
+    datehandling,
+    extractdomaininfo,
+    extractserverinfo,
+)
 
 load_dotenv()
-
-
-def datehandling(row, namemapping):
-    # This method is called from ensure(row) when the lookup of a date fails.
-    # We have to calculate all date related fields and add them to the row.
-    date = pygrametl.getvalue(row, "date", namemapping)
-
-    (
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        weekday,
-        dayinyear,
-        dst,
-    ) = time.strptime(date, "%Y-%m-%d")
-
-    isoyear, isoweek, isoweekday = datetime.date(
-        year,
-        month,
-        day,
-    ).isocalendar()
-
-    row["day"] = day
-    row["month"] = month
-    row["year"] = year
-    row["week"] = isoweek
-    row["weekyear"] = isoyear
-    row["dateid"] = dayinyear + 366 * (year - 1990)
-
-    return row
-
-
-def extractdomaininfo(row):
-    # Take the 'www.domain.org' part from 'http://www.domain.org/page.html'.
-    domaininfo = row["url"].split("/")[-2]
-    row["domain"] = domaininfo
-
-    # Take the top level which is the last part of the domain.
-    row["topleveldomain"] = domaininfo.split(".")[-1]
-
-
-def extractserverinfo(row):
-    # Find the server name from a string like "ServerName/Version".
-    row["server"] = row["serverversion"].split("/")[0]
-
 
 def create_etl():
     username = os.getenv("USERNAME")
@@ -96,6 +51,25 @@ def create_etl():
         user=username,
     )
 
+    
+
+    def pgcopybulkloader(
+            name,
+            atts,
+            fieldsep,
+            rowsep,
+            nullval,
+            filehandle,
+        ):
+            sql = (
+                f"COPY {name}({', '.join(atts)}) FROM STDIN "
+                f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
+            )
+            raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
+            with pgconn.cursor().copy(sql) as copy:
+                for chunk in iter(lambda: raw.read(1 << 20), b""):
+                    copy.write(chunk)
+
     connection = ConnectionWrapper(pgconn)
     connection.setasdefault()
     connection.execute("SET search_path TO pygrametlexa")
@@ -115,22 +89,7 @@ def create_etl():
         user=username,
     )
 
-    def pgcopybulkloader(
-        name,
-        atts,
-        fieldsep,
-        rowsep,
-        nullval,
-        filehandle,
-    ):
-        sql = (
-            f"COPY {name}({', '.join(atts)}) FROM STDIN "
-            f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
-        )
-        raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
-        with pgconn.cursor().copy(sql) as copy:
-            for chunk in iter(lambda: raw.read(1 << 20), b""):
-                copy.write(chunk)
+    
 
     # Dimension and fact table objects
     pagedim = SlowlyChangingDimension(
@@ -253,8 +212,6 @@ def run_etl(
     extract_server=extractserverinfo,
     get_int=pygrametl.getint,
 ):
-    print(time.asctime())
-
     try:
         for row in inputdata:
             extract_domain(row)
@@ -280,9 +237,6 @@ def run_etl(
         sourceconn1.close()
         sourceconn2.close()
         connection.close()
-
-    print(time.asctime())
-
 
 def main():
     etl = create_etl()
