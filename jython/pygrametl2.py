@@ -66,7 +66,7 @@ def pgbulkloader(name, atts, fieldsep, rowsep, nullval, filename):
 dwhost = os.environ.get('DW_HOST', 'localhost')
 dwport = os.environ.get('DW_PORT', '55433')
 dwdb = os.environ.get('DW_DATABASE', 'pygrametl_dw')
-dwuser = os.environ.get('USERNAME', 'mertz')
+dwuser = os.environ.get('USERNAME')
 
 java.lang.Class.forName("org.postgresql.Driver")
 rawconn = java.sql.DriverManager.getConnection \
