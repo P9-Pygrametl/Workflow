@@ -1,35 +1,50 @@
 import datetime
-import time
-import psycopg
-import pygrametl
 import os
-from dotenv import load_dotenv, dotenv_values 
-load_dotenv() 
+import time
 
-from pygrametl import ConnectionWrapper
-from pygrametl.datasources import CSVSource, MergeJoiningSource
-from pygrametl.tables import CachedDimension, SnowflakedDimension,\
-    SlowlyChangingDimension, BulkFactTable
+import java.lang.Class
+import java.sql.DriverManager
 
-pgconn = psycopg.connect(
-    host="localhost",
-    dbname=os.getenv("DW_DATABASE"),
-    user=os.getenv("USERNAME"),
+
+import pygrametl
+from jython_dw import (
+    downloadlog_source,
+    loadenv,
+    reset_warehouse,
+    testresults_source,
 )
-connection = ConnectionWrapper(pgconn)
+from pygrametl.JDBCConnectionWrapper import BackgroundJDBCConnectionWrapper
+from pygrametl.datasources import MergeJoiningSource
+from pygrametl.tables import CachedDimension, SlowlyChangingDimension,\
+    BulkFactTable
+
+
+loadenv()
+
+
+# Connection to target DW:
+dwhost = os.environ.get('DW_HOST', 'localhost')
+dwport = os.environ.get('DW_PORT', '55433')
+dwdb = os.environ.get('DW_DATABASE', 'pygrametl_dw')
+dwuser = os.environ.get('USERNAME')
+
+java.lang.Class.forName("org.postgresql.Driver")
+pgconn = java.sql.DriverManager.getConnection \
+         ("jdbc:postgresql://%s:%s/%s?user=%s" % (dwhost, dwport, dwdb, dwuser))
+pgconn.setAutoCommit(False)
+reset_warehouse(pgconn)
+connection = BackgroundJDBCConnectionWrapper(pgconn)
 connection.setasdefault()
 connection.execute('set search_path to pygrametlexa')
 
+
 # Methods
 def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filehandle):
-    sql = (
-        f"COPY {name}({', '.join(atts)}) FROM STDIN "
-        f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
-    )
-    raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
-    with pgconn.cursor().copy(sql) as copy:
-        for chunk in iter(lambda: raw.read(1 << 20), b""):
-            copy.write(chunk)
+    global pgconn
+    copymgr = pgconn.getCopyAPI()
+    sql = "COPY %s(%s) FROM STDIN WITH DELIMITER '%s'" % \
+          (name, ', '.join(atts), fieldsep)
+    copymgr.copyIn(sql, filehandle)
 
 def datehandling(row, namemapping):
     # This method is called from ensure(row) when the lookup of a date fails.
@@ -103,17 +118,13 @@ facttbl = BulkFactTable(
 
 
 # Data sources
-downloadlog = CSVSource(open('DownloadLog.csv', 'r', 16384),
-                        delimiter='\t')
-
-testresults = CSVSource(open('TestResults.csv', 'r', 16384),
-                        delimiter='\t')
+downloadlog = downloadlog_source()
+testresults = testresults_source()
 
 inputdata = MergeJoiningSource(downloadlog, 'localfile', testresults,
                                'localfile')
 
 def main():
-    print (time.asctime())
     for row in inputdata:
         extractdomaininfo(row)
         extractserverinfo(row)
@@ -125,7 +136,6 @@ def main():
         facttbl.insert(row)
     connection.commit()
     connection.close()
-    print (time.asctime())
 
 if __name__ == '__main__':
     main()

@@ -239,6 +239,8 @@ def save_results(results):
     )
     placeholders = ", ".join("?" for _ in columns)
 
+    RESULTS_DB.parent.mkdir(parents=True, exist_ok=True)
+
     with sqlite3.connect(RESULTS_DB) as conn:
         conn.execute(
             f"CREATE TABLE IF NOT EXISTS results ({column_defs}) STRICT"
