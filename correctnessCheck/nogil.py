@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 # Allow imports from the repository root when running this file directly.
 sys.path.insert(0, str(ROOT))
 
+from pygrametl import ConnectionWrapper
 from pygrametl.nogil import PicklableConnectionWrapper
 from pygrametl.datasources import (
     CSVSource,
@@ -40,7 +41,6 @@ from helpers.helpers import (
 )
 
 BATCHSIZE = 500
-_connRef = []
 load_dotenv()
 
 
@@ -76,11 +76,9 @@ def create_etl():
         dbname=dw_database,
         user=username,
     )
-    picklable_connection = PicklableConnectionWrapper(pgconn)
-    _connRef.append(picklable_connection)
 
     shrdconn = shareconnectionwrapper(
-        picklable_connection, 10, (pgcopybulkloader,)
+        ConnectionWrapper(pgconn), 10, (pgcopybulkloader,)
     )
     shrdconn.execute("set search_path to pygrametlexa")
 

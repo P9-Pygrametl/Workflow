@@ -8,11 +8,11 @@ import pygrametl
 
 load_dotenv()
 
-from pygrametl.nogil import PicklableConnectionWrapper, PicklableSQLSource
+from pygrametl import ConnectionWrapper
 from pygrametl.datasources import (
     MergeJoiningSource,
-    SQLSource,
     ProcessSource,
+    SQLSource,
     TransformingSource,
 )
 from pygrametl.parallel import (
@@ -28,29 +28,45 @@ from pygrametl.tables import (
     SlowlyChangingDimension,
 )
 
-from helpers.helpers import (
-    datehandling,
-    extractdomaininfo,
-    extractserverinfo,
-    convertsize,
-)
-
 BATCHSIZE = 500
-_connRef = []
+
+def datehandling(row, namemapping):
+    date = pygrametl.getvalue(row, "date", namemapping)
+    (
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        weekday,
+        dayinyear,
+        dst,
+    ) = time.strptime(date, "%Y-%m-%d")
+    isoyear, isoweek, isoweekday = datetime.date(
+        year, month, day
+    ).isocalendar()
+    row["day"] = day
+    row["month"] = month
+    row["year"] = year
+    row["week"] = isoweek
+    row["weekyear"] = isoyear
+    row["dateid"] = dayinyear + 366 * (year - 1990)
+    return row
 
 
-def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filename):
-    connection = pygrametl.getdefaulttargetconnection()
-    if connection is None:
-        raise RuntimeError("DW connection wrapper is not initialized")
+def extractdomaininfo(row):
+    domaininfo = row["url"].split("/")[-2]
+    row["domain"] = domaininfo
+    row["topleveldomain"] = domaininfo.split(".")[-1]
 
-    sql = (
-        f"COPY {name}({', '.join(atts)}) FROM STDIN "
-        f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
-    )
-    with open(filename, "rb") as f, connection.cursor().copy(sql) as copy:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            copy.write(chunk)
+
+def extractserverinfo(row):
+    row["server"] = row["serverversion"].split("/")[0]
+
+
+def convertsize(row):
+    row["size"] = pygrametl.getint(row["size"])
 
 
 def create_etl():
@@ -74,43 +90,42 @@ def create_etl():
     except ValueError:
         raise ValueError(f"DW_PORT must be an integer, got {dw_port_value!r}")
 
-    # Data Warehouse Connection
     pgconn = psycopg.connect(
         host=dw_host,
         port=dw_port,
         dbname=dw_database,
         user=username,
     )
-    picklable_pgconn = PicklableConnectionWrapper(pgconn)
-    _connRef.append(picklable_pgconn)
+
+    def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filename):
+        sql = (
+            f"COPY {name}({', '.join(atts)}) FROM STDIN "
+            f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
+        )
+        with open(filename, "rb") as f, pgconn.cursor().copy(sql) as copy:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                copy.write(chunk)
 
     shrdconn = shareconnectionwrapper(
-        picklable_pgconn, 10, (pgcopybulkloader,)
+        ConnectionWrapper(pgconn), 10, (pgcopybulkloader,)
     )
     shrdconn.execute("set search_path to pygrametlexa")
 
-    # Source Database Connections wrapped in PicklableConnectionWrapper
-    sourceconn1 = PicklableConnectionWrapper(
-        psycopg.connect(
-            host=source_host,
-            port=source_port,
-            dbname=source_database,
-            user=username,
-        )
+    sourceconn1 = psycopg.connect(
+        host=source_host,
+        port=source_port,
+        dbname=source_database,
+        user=username,
     )
-    _connRef.append(sourceconn1)
 
-    sourceconn2 = PicklableConnectionWrapper(
-        psycopg.connect(
-            host=source_host,
-            port=source_port,
-            dbname=source_database,
-            user=username,
-        )
+    sourceconn2 = psycopg.connect(
+        host=source_host,
+        port=source_port,
+        dbname=source_database,
+        user=username,
     )
-    _connRef.append(sourceconn2)
 
-    # Sequence factory
+    # Sequence factory is created local to this call run to ensure thread-safety
     idfactory = getsharedsequencefactory(0)
 
     def getpagediminstances():
@@ -181,7 +196,7 @@ def create_etl():
         returnvalues=False,
     )
 
-    downloadlog = PicklableSQLSource(
+    downloadlog = SQLSource(
         connection=sourceconn1,
         query="""
             SELECT 
@@ -198,7 +213,7 @@ def create_etl():
         fetchsize=5000,
     )
 
-    testresults = PicklableSQLSource(
+    testresults = SQLSource(
         connection=sourceconn2,
         query="""
             SELECT 
@@ -216,13 +231,11 @@ def create_etl():
         downloadlog, "localfile", testresults, "localfile"
     )
 
-    transformeddata = TransformingSource(
-        joineddata, extractdomaininfo, extractserverinfo, convertsize
-    )
+    transformeddata = TransformingSource(joineddata, extractdomaininfo, 
+                                     extractserverinfo, convertsize)
 
-    inputdata = ProcessSource(
-        transformeddata, batchsize=BATCHSIZE, queuesize=10
-    )
+    # ProcessSource will also spawn worker threads.
+    inputdata = ProcessSource(transformeddata, batchsize=BATCHSIZE, queuesize=10)
 
     return (
         shrdconn,
@@ -259,7 +272,8 @@ def run_etl(
 
         shrdconn.commit()
     finally:
-        # Explicitly close and join processes/connections
+        # Explicitly close and join the processes of the decoupled tables
+        # before closing the core database connections.
         try:
             pagedim.close()
         except Exception:
@@ -270,10 +284,10 @@ def run_etl(
         except Exception:
             pass
 
+        # Close all data sources and connections
         sourceconn1.close()
         sourceconn2.close()
         shrdconn.close()
-
 
 
 def main():

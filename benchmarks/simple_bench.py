@@ -4,14 +4,10 @@ import threading
 import time
 from pathlib import Path
 
-# 1. SETUP SYS.PATH FIRST (Must be done before importing local modules)
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-# 2. STANDARD LIBRARY IMPORTS
-
-# 3. EXTERNAL AND PROJECT IMPORTS
 from dotenv import load_dotenv
 import psycopg
 import psutil
@@ -22,13 +18,9 @@ from cpygrametl2_db import (
     run_etl,
 )
 from datagenerator.datagenerator_db import generate
-# ==============================================================================
-# CONFIGURATION
-# ==============================================================================
-PAGES = 100  # Define the workload scale (number of pages to generate)
-# ==============================================================================
 
-# Load environment variables from the repository root
+PAGES = 100  # Define the workload scale (number of pages to generate)
+
 load_dotenv(ROOT / ".env")
 
 DW_DATABASE = os.getenv("DW_DATABASE")
@@ -58,7 +50,6 @@ PHASES = [
 
 
 def reset_warehouse():
-    """Reset the PostgreSQL data warehouse using the star schema."""
     schema = (ROOT / "starschema.sql").read_text()
 
     connection = psycopg.connect(
@@ -77,44 +68,76 @@ def reset_warehouse():
 
 
 def monitor_resources(stop_event, stats, interval=0.05):
-    """Monitors RSS, PSS, and CPU usage of the active process."""
-    try:
-        proc = psutil.Process(os.getpid())
-        proc.cpu_percent(interval=None)
+    """Monitors RSS, PSS, and CPU usage of the active process tree in the background."""
+    root_pid = os.getpid()
+    samples = []
+    
+    # Keep a persistent cache of Process objects so their CPU counters persist
+    process_cache = {}
 
-        samples = []
+    while not stop_event.is_set():
+        timestamp = time.perf_counter()
+        
+        try:
+            root_proc = psutil.Process(root_pid)
+            # Find current active processes in the tree
+            active_pids = [root_pid] + [p.pid for p in root_proc.children(recursive=True)]
+        except psutil.Error:
+            break
 
-        while not stop_event.is_set():
-            if not proc.is_running() or proc.status() == psutil.STATUS_ZOMBIE:
-                break
+        # Clean up cached processes that are no longer active
+        for pid in list(process_cache.keys()):
+            if pid not in active_pids:
+                del process_cache[pid]
 
-            timestamp = time.perf_counter()
+        # Populate/retrieve from cache
+        for pid in active_pids:
+            if pid not in process_cache:
+                try:
+                    p = psutil.Process(pid)
+                    # First call establishes the baseline comparison point
+                    p.cpu_percent(interval=None)
+                    process_cache[pid] = p
+                except psutil.Error:
+                    pass
 
-            # Fetch RSS and PSS memory figures safely from the process
+        total_cpu = 0.0
+
+        # Aggregate metrics across the cached process tree
+        for pid, proc in list(process_cache.items()):
+            try:
+                if proc.status() == psutil.STATUS_ZOMBIE:
+                    continue
+                
+                # This second call now has a historical point of reference in the cache!
+                total_cpu += proc.cpu_percent(interval=None)
+            except psutil.Error:
+                # Process died since active_pids fetch
+                if pid in process_cache:
+                    del process_cache[pid]
+
+
             mem_info = proc.memory_full_info()
             rss_mb = mem_info.rss / (1024 * 1024)
-
-            # PSS is only supported on Linux and macOS; fallback to RSS on Windows
             pss_mb = (getattr(mem_info, "pss", mem_info.rss)) / (1024 * 1024)
 
-            process_cpu = proc.cpu_percent(interval=None)
+        samples.append({
+            "time": timestamp,
+            "rss_mb": rss_mb,
+            "pss_mb": pss_mb,
+            "cpu_percent": total_cpu,
+        })
 
-            samples.append({
-                "time": timestamp,
-                "rss_mb": rss_mb,
-                "pss_mb": pss_mb,
-                "cpu_percent": process_cpu,
-            })
+        time.sleep(interval)
 
-            time.sleep(interval)
-
-        stats["samples"] = samples
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
-        pass
+    stats["samples"] = samples
 
 
 def run_etl_worker(results_dict, exception_holder):
-    """Worker target that runs the ETL workload and times its phases."""
+    """Worker target that runs the ETL workload and times its phases.
+
+    Uses light local time calls on hot-paths to avoid blocking the DB loop.
+    """
     try:
         # Structure to hold phase timestamps
         phase_events = {phase: {"start": 0.0, "end": 0.0} for phase in PHASES}
@@ -165,7 +188,7 @@ def run_etl_worker(results_dict, exception_holder):
         timings_cpu["initialisation"] = time.process_time() - cpu_start
         phase_events["initialisation"]["end"] = time.perf_counter()
 
-        # Wrap components
+        # Wrap components using standard lightning-fast timing objects
         timed_input = TimedIterable(inputdata, timings, timings_cpu)
 
         timed_getint = wrap_with_timing(
@@ -408,16 +431,21 @@ def run_and_profile():
         )
 
     print("\n" + "=" * 105)
-    print(f"'Total ETL Execution Time (excluding Data Generation/Reset): {total_wall - timings["data_generation"] - timings["schema_reset"]:.2f}s'")
+    print(
+        f"'Total ETL Execution Time (excluding Data Generation/Reset): "
+        f"{total_wall - timings['data_generation'] - timings['schema_reset']:.2f}s'"
+    )
     print("\n" + "=" * 105)
     print(f"{'AGGREGATE HARDWARE PERFORMANCE':^105}")
     print("=" * 105)
     print(f"  Average Process CPU Utilisation:      {avg_cpu:6.2f}%")
     print(
-        f"  Average Resident Memory (RSS):        {avg_rss:6.2f} MB  |  Peak Resident Memory (RSS): {max_rss:6.2f} MB"
+        f"  Average Resident Memory (RSS):        {avg_rss:6.2f} MB  |  "
+        f"Peak Resident Memory (RSS): {max_rss:6.2f} MB"
     )
     print(
-        f"  Average Proportional Memory (PSS):    {avg_pss:6.2f} MB  |  Peak Proportional Memory (PSS): {max_pss:6.2f} MB"
+        f"  Average Proportional Memory (PSS):    {avg_pss:6.2f} MB  |  "
+        f"Peak Proportional Memory (PSS): {max_pss:6.2f} MB"
     )
     print("=" * 105)
 
