@@ -5,6 +5,7 @@
 __pycache__/
 *.py[cod]
 .vscode/
+.jython_cache/
 *$py.class
 DownloadLog.csv
 TestResults.csv
