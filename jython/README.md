@@ -58,9 +58,6 @@ Run the parallel pipeline:
   jython/pygrametl2.py
 ```
 
-Both scripts drop and recreate `pygrametlexa` on startup, so they can be run
-back-to-back without a separate reset step.
-
 ## Tuning
 
 `tune.py` compares heap and GC settings using wall and CPU time:
