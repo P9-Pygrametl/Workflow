@@ -7,7 +7,6 @@ import java.sql.DriverManager
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-DEFAULT_SCHEMA = os.path.join(ROOT, 'starschema.sql')
 DEFAULT_ENV = os.path.join(ROOT, '.env')
 
 
@@ -50,28 +49,6 @@ TESTRESULTS_QUERY = """
     FROM testresults
     ORDER BY localfile, test
 """
-
-
-def reset_warehouse(connection, schemafile=None):
-    """Drop and recreate the warehouse schema using starschema.sql."""
-    if schemafile is None:
-        schemafile = DEFAULT_SCHEMA
-    if not os.path.exists(schemafile):
-        raise IOError("Schema file not found: %s" % schemafile)
-
-    schema = open(schemafile, 'r').read()
-    statement = connection.createStatement()
-
-    try:
-        for command in schema.split(';'):
-            command = command.strip()
-            if command:
-                statement.execute(command)
-    except:
-        connection.rollback()
-        raise
-    finally:
-        statement.close()
 
 
 def source_connection():

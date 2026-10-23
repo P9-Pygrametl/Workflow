@@ -24,7 +24,6 @@ import pygrametl
 from jython_dw import (
     downloadlog_source,
     loadenv,
-    reset_warehouse,
     testresults_source,
 )
 from pygrametl.JDBCConnectionWrapper import JDBCConnectionWrapper
@@ -72,7 +71,6 @@ java.lang.Class.forName("org.postgresql.Driver")
 rawconn = java.sql.DriverManager.getConnection \
          ("jdbc:postgresql://%s:%s/%s?user=%s" % (dwhost, dwport, dwdb, dwuser))
 rawconn.setAutoCommit(False)
-reset_warehouse(rawconn)
 shrdconn = shareconnectionwrapper(JDBCConnectionWrapper(rawconn), 10,
                                    (pgbulkloader,))
 shrdconn.execute('set search_path to pygrametlexa')
