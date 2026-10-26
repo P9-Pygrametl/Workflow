@@ -1,10 +1,14 @@
+import asyncio
 import sqlite3
 import os
 import statistics
 import psycopg
 import sys
 import time
+import threading
 from pathlib import Path
+
+import psutil
 
 from dotenv import load_dotenv
 
@@ -16,7 +20,9 @@ sys.path.insert(0, str(ROOT))
 
 from benchmarks.profile_etl import profile
 from datagenerator.datagenerator_db import generate
-from shared.cpygrametl1_db import main as run_etl
+
+from shared.cpygrametl1_db import main as run_sync_etl
+from shared.cpygrametl1_async_db import main as run_async_etl
 from benchmarks.toxiproxy import (
     prepare_latency,
     reset_latency_toxics,
@@ -41,7 +47,48 @@ except ValueError as error:
         f"DW_PORT must be an integer, got {DW_PORT_RAW!r}"
     ) from error
 
-BENCHMARK_SCRIPT = "cpygrametl1_db.py"
+ETL_MODE = os.getenv("ETL_MODE", "sync").lower()
+
+if ETL_MODE not in ("sync", "async"):
+    raise ValueError("ETL_MODE must be 'sync' or 'async'")
+
+# Record which SlowlyChangingDimension implementation the run uses.
+SCD_MODE = os.getenv("SCD_MODE", "original").lower()
+if SCD_MODE not in ("original", "optimized"):
+    raise ValueError("SCD_MODE must be 'original' or 'optimized'")
+if ETL_MODE == "sync" and SCD_MODE == "optimized":
+    raise ValueError(
+        "The synchronous ETL does not select PostgreSQLOptimizedSCD. "
+        "Use ETL_MODE=async or SCD_MODE=original."
+    )
+
+# Keep the benchmark metadata aligned with AsyncSQLSource's configuration.
+# Synchronous runs have no prefetch setting (stored as SQL NULL).
+PREFETCH = None
+if ETL_MODE == "async":
+    prefetch_raw = os.getenv("PREFETCH", "0")
+    try:
+        PREFETCH = int(prefetch_raw)
+    except ValueError as error:
+        raise ValueError(
+            f"PREFETCH must be a non-negative integer, got {prefetch_raw!r}"
+        ) from error
+    if PREFETCH < 0:
+        raise ValueError("PREFETCH must be a non-negative integer")
+
+BENCHMARK_SCRIPT = (
+    "cpygrametl1_db.py"
+    if ETL_MODE == "sync"
+    else "cpygrametl1_async_db.py"
+)
+
+
+def run_selected_etl():
+    if ETL_MODE == "sync":
+        run_sync_etl()
+    else:
+        asyncio.run(run_async_etl())
+
 
 PHASES = [
     "initialisation",
@@ -71,6 +118,26 @@ if REPEATS < 1:
     )
 
 RESULTS_DB = ROOT / "data" / "benchmark_results.db"
+RUN_PROFILING = os.getenv("RUN_PROFILING", "0") == "1"
+
+MEMORY_INTERVAL = 0.1  # seconds
+
+
+def sample_memory(stop_event, samples):
+    """Sample this benchmark process's resident memory during an ETL run.
+
+    The sequential ETL uses the same process, so process RSS is suitable here.
+    Do not reuse this as a total-memory measure for multiprocessing workloads.
+    """
+    process = psutil.Process(os.getpid())
+    while not stop_event.is_set():
+        try:
+            samples.append(process.memory_info().rss / (1024 * 1024))
+        except psutil.Error:
+            break
+        stop_event.wait(MEMORY_INTERVAL)
+
+
 
 def reset_warehouse():
     """Reset the PostgreSQL data warehouse using the star schema."""
@@ -114,13 +181,25 @@ def run_benchmark(rtt_ms):
     print("  Resetting warehouse...")
     reset_warehouse()
 
+    stop_event = threading.Event()
+    rss_samples = []
+    memory_monitor = threading.Thread(
+        target=sample_memory, args=(stop_event, rss_samples), daemon=True
+    )
+    memory_monitor.start()
+
     cpu_start = time.process_time()
     wall_start = time.perf_counter()
+    try:
+        run_selected_etl()
+    finally:
+        wall_end = time.perf_counter()
+        cpu_end = time.process_time()
+        stop_event.set()
+        memory_monitor.join()
 
-    run_etl()
-
-    wall_end = time.perf_counter()
-    cpu_end = time.process_time()
+    # Include a final sample after the workload ends.
+    rss_samples.append(psutil.Process().memory_info().rss / (1024 * 1024))
 
     wall_time = wall_end - wall_start
     cpu_time = cpu_end - cpu_start
@@ -142,6 +221,8 @@ def run_benchmark(rtt_ms):
         "python_cpu_seconds": cpu_time,
         "waiting_seconds": waiting_time,
         "cpu_percent": cpu_percent,
+        "avg_rss_mb": statistics.mean(rss_samples) if rss_samples else None,
+        "peak_rss_mb": max(rss_samples) if rss_samples else None,
     }
 
 
@@ -214,6 +295,9 @@ def save_results(results):
         results: Benchmark result dictionaries to store.
     """
     columns = [
+        ("etl_mode", "TEXT"),
+        ("scd_mode", "TEXT"),
+        ("prefetch", "INTEGER"),
         ("workload_pages", "INTEGER"),
         ("run", "INTEGER"),
         ("source_rtt_ms", "INTEGER"),
@@ -221,6 +305,8 @@ def save_results(results):
         ("python_cpu_seconds", "REAL"),
         ("waiting_seconds", "REAL"),
         ("cpu_percent", "REAL"),
+        ("avg_rss_mb", "REAL"),
+        ("peak_rss_mb", "REAL"),
         ("profiled_wall_seconds", "REAL"),
         ("rows", "INTEGER"),
         ("timestamp", "TEXT"),
@@ -245,6 +331,11 @@ def save_results(results):
         conn.execute(
             f"CREATE TABLE IF NOT EXISTS results ({column_defs}) STRICT"
         )
+        # Preserve historical results from older versions of this benchmark.
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(results)")}
+        for name, col_type in columns:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE results ADD COLUMN {name} {col_type}")
         conn.executemany(
             f"INSERT INTO results ({', '.join(column_names)}) "
             f"VALUES ({placeholders})",
@@ -283,7 +374,10 @@ def print_summary(results):
         for source_rtt_ms in latencies:
             print(
                 f"\nWorkload: pages={pages}, "
-                f"RTT latency={source_rtt_ms} ms"
+                f"RTT latency={source_rtt_ms} ms, "
+                f"mode={ETL_MODE}, "
+                f"scd={SCD_MODE}, "
+                f"prefetch={PREFETCH if PREFETCH is not None else 'N/A'}"
             )
 
             matching = [
@@ -326,6 +420,14 @@ def print_summary(results):
                 f"median CPU utilisation="
                 f"{statistics.median(cpu_percentages):.2f}%"
             )
+
+            print(
+                f"median average RSS={statistics.median(r['avg_rss_mb'] for r in matching):.2f} MB | "
+                f"median peak RSS={statistics.median(r['peak_rss_mb'] for r in matching):.2f} MB"
+            )
+
+            if not RUN_PROFILING:
+                continue
 
             print(
                 "  Median phase wall / CPU / waiting:"
@@ -424,6 +526,13 @@ def main():
                         f"  Python CPU: "
                         f"{result['python_cpu_seconds']:.2f}s"
                     )
+                    print(
+                        f"  Average RSS: {result['avg_rss_mb']:.2f} MB | "
+                        f"Peak RSS: {result['peak_rss_mb']:.2f} MB"
+                    )
+
+                if not RUN_PROFILING:
+                    continue
 
                 print("\n=== Phase profiling runs ===")
 
@@ -443,7 +552,7 @@ def main():
                     print("  Resetting warehouse...")
                     reset_warehouse()
 
-                    profile_result = profile()
+                    profile_result = profile(mode=ETL_MODE)
 
                     result = results_by_key[
                         (pages, source_rtt_ms, run_number)
@@ -464,6 +573,10 @@ def main():
             for key in sorted(results_by_key)
         ]
 
+        for result in results:
+            result["etl_mode"] = ETL_MODE
+            result["scd_mode"] = SCD_MODE
+            result["prefetch"] = PREFETCH
         save_results(results)
 
     finally:
