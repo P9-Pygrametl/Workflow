@@ -14,6 +14,7 @@ Example:
 import argparse
 import os
 import sys
+import random
 import time
 from pathlib import Path
 
@@ -183,6 +184,7 @@ def run_page_size(
 
     results = []
     oracle = None
+    random.shuffle(MODES)  
     for mode in MODES:
         versions = get_versions(mode.interpreter)
 
