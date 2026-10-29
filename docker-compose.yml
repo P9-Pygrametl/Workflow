@@ -9,6 +9,8 @@ services:
       - "127.0.0.1:55432:5432"
     volumes:
       - source_pgdata:/var/lib/postgresql
+      - ./postgres.conf:/etc/postgresql/postgresql.conf:ro
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${USERNAME} -d ${SOURCE_DATABASE}"]
       interval: 5s
@@ -25,6 +27,8 @@ services:
       - "127.0.0.1:55433:5432"
     volumes:
       - dw_pgdata:/var/lib/postgresql
+      - ./postgres.conf:/etc/postgresql/postgresql.conf:ro
+    command: ["postgres", "-c", "config_file=/etc/postgresql/postgresql.conf"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${USERNAME} -d ${DW_DATABASE}"]
       interval: 5s
