@@ -67,12 +67,32 @@ MODES = [
         CPYTHON_NOGIL,
         ["-m", "shared.cpygrametl1_db"],
     ),
+        Mode(
+        "cpygrametl1_db_async",
+        "cpython-3.14",
+        CPYTHON,
+        ["-m", "async_workflows.cpygrametl1_db_async"],
+        oracle=True,
+    ),
+    Mode(
+        "cpygrametl1_db_async",
+        "cpython-3.14t",
+        CPYTHON_NOGIL,
+        ["-m", "async_workflows.cpygrametl1_db_async"],
+    ),
     Mode("cpygrametl2_db", "cpython-3.14", CPYTHON, ["-m", "shared.cpygrametl2_db"]),
     Mode(
         "cpygrametl2_db",
         "cpython-3.14t",
         CPYTHON_NOGIL,
         ["-m", "shared.cpygrametl2_db"],
+    ),
+    Mode("cpygrametl2_db_async", "cpython-3.14", CPYTHON, ["-m", "async_workflows.cpygrametl2_db_async"]),
+    Mode(
+        "cpygrametl2_db_async",
+        "cpython-3.14t",
+        CPYTHON_NOGIL,
+        ["-m", "async_workflows.cpygrametl2_db_async"],
     ),
     Mode(
         "pipeline",
