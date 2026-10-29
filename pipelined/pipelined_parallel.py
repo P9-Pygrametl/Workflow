@@ -247,13 +247,14 @@ def run_etl(
             fact["dateid"] = datedim.ensure(row, {"date": "downloaddate"})
             fact["testid"] = testdim.lookup(row, {"testname": "test"})
             facttbl.insert(fact)
-
-        shrdconn.commit()
     finally:
         # Stop the decoupled workers before closing the connections.
         for part in pagedim.parts:
             part.shutdowndecoupled()
         facttbl.shutdowndecoupled()
+
+        # Commit the transaction
+        shrdconn.commit()
 
         # Close all data sources and connections
         sourceconn1.close()
