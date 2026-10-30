@@ -2,9 +2,9 @@
 
 Each run is a subprocess so CPython 3.14, free-threaded CPython 3.14t,
 and Jython can be compared in one invocation. The warehouse is reset
-before every run, and wall time, CPU time, peak proportional memory,
-and warehouse row counts are recorded in one SQLite table. Each run is
-checked for orphaned facts and, by default, its warehouse fingerprint
+before every run, and wall time, CPU time, peak memory (PSS on Linux,
+RSS on macOS), and warehouse row counts are recorded in one SQLite table. 
+Each run is checked for orphaned facts and, by default, its warehouse fingerprint
 is compared with the sequential cpygrametl1_db run.
 
 Example:
@@ -95,6 +95,7 @@ def run_mode(
         cpu_seconds=measurement.cpu_seconds,
         cpu_percent=measurement.cpu_percent,
         peak_pss_mb=measurement.peak_pss_mb,
+        peak_rss_mb=measurement.peak_rss_mb,
         page_rows=state["page"],
         test_rows=state["test"],
         date_rows=state["date"],
@@ -115,10 +116,23 @@ def run_mode(
 
 def print_outcome(result: RunResult, errors: list[str]) -> None:
     if result.succeeded:
+        pss = (
+            f"{result.peak_pss_mb:.1f}MiB"
+            if result.peak_pss_mb is not None
+            else "N/A"
+        )
+
+        rss = (
+            f"{result.peak_rss_mb:.1f}MiB"
+            if result.peak_rss_mb is not None
+            else "N/A"
+        )
+
         print(
             f"  wall={result.wall_seconds:.2f}s "
             f"cpu={result.cpu_seconds:.2f}s "
-            f"pss={result.peak_pss_mb or 0:.1f}MB "
+            f"pss={pss} "
+            f"rss={rss} "
             f"facts={result.fact_rows}"
         )
     else:
