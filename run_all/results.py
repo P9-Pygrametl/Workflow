@@ -1,7 +1,10 @@
 """SQLite storage for benchmark runs."""
 
+import argparse
+import csv
 import sqlite3
 from dataclasses import asdict, dataclass
+from pathlib import Path
 
 from run_all.config import RESULTS_DB
 
@@ -102,6 +105,16 @@ class ResultsStore:
     def commit(self):
         self.connection.commit()
 
+    def export_csv(self, csv_path: Path | str) -> None:
+        """Write every run to a CSV file."""
+        cursor = self.connection.execute("SELECT * FROM runs ORDER BY id")
+        columns = [column[0] for column in cursor.description]
+
+        with open(csv_path, "w", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(columns)
+            writer.writerows(cursor)
+
     def _existing_columns(self):
         rows = self.connection.execute("PRAGMA table_info(runs)")
         return {row[1] for row in rows}
@@ -118,3 +131,16 @@ class ResultsStore:
                 continue
             self.connection.execute(f"ALTER TABLE runs ADD COLUMN {name} {sql_type}")
         self.connection.commit()
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Export benchmark runs to CSV.")
+    parser.add_argument("csv_path", type=Path, help="Destination CSV file.")
+    args = parser.parse_args()
+
+    with ResultsStore() as store:
+        store.export_csv(args.csv_path)
+
+
+if __name__ == "__main__":
+    main()
