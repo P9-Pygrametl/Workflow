@@ -94,8 +94,8 @@ def run_mode(
         wall_seconds=measurement.wall_seconds,
         cpu_seconds=measurement.cpu_seconds,
         cpu_percent=measurement.cpu_percent,
-        peak_memory_mb=measurement.peak_memory_mb,
-        memory_metric=measurement.memory_metric,
+        peak_pss_mb=measurement.peak_pss_mb,
+        peak_rss_mb=measurement.peak_rss_mb,
         page_rows=state["page"],
         test_rows=state["test"],
         date_rows=state["date"],
@@ -116,10 +116,23 @@ def run_mode(
 
 def print_outcome(result: RunResult, errors: list[str]) -> None:
     if result.succeeded:
+        pss = (
+            f"{result.peak_pss_mb:.1f}MiB"
+            if result.peak_pss_mb is not None
+            else "N/A"
+        )
+
+        rss = (
+            f"{result.peak_rss_mb:.1f}MiB"
+            if result.peak_rss_mb is not None
+            else "N/A"
+        )
+
         print(
             f"  wall={result.wall_seconds:.2f}s "
             f"cpu={result.cpu_seconds:.2f}s "
-            f"{result.memory_metric}={result.peak_memory_mb or 0:.1f}MiB "
+            f"pss={pss} "
+            f"rss={rss} "
             f"facts={result.fact_rows}"
         )
     else:
