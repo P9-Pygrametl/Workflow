@@ -184,30 +184,14 @@ def run_page_size(
 
     results = []
     oracle = None
-    run_order = []
     for run_number in range(1, repeats + 1):
-        round_runs = []
+        random.shuffle(MODES)
         for mode in MODES:
-            run = {
-                "store": store,
-                "mode": mode,
-                "versions": get_versions(mode.interpreter),
-                "pages": pages,
-                "run_number": run_number,
-                "deep_validate": deep_validate,
-            }
-            round_runs.append(run)
-        
-        random.shuffle(round_runs)
-        run_order.extend(round_runs)
-
-    for run in run_order:
-        print(f"\n--- {run['mode'].label} run {run['run_number']}/{repeats} ---")
-        result = run_mode(**run)
-        results.append(result)
-        
-        if run["mode"].oracle and oracle is None:
-            oracle = result
+            print(f"\n--- {mode.label} run {run_number}/{repeats} ---")
+            result = run_mode(store, mode, get_versions(mode.interpreter), pages, run_number, deep_validate)
+            results.append(result)
+            if mode.oracle and oracle is None:
+                oracle = result
 
     if deep_validate:
         apply_oracle_check(store, results, oracle)
