@@ -16,7 +16,8 @@ class RunResult:
     wall_seconds: float | None = None
     cpu_seconds: float | None = None
     cpu_percent: float | None = None
-    peak_pss_mb: float | None = None
+    peak_memory_mb: float | None = None
+    memory_metric: str | None = None
     page_rows: int | None = None
     test_rows: int | None = None
     date_rows: int | None = None
@@ -45,7 +46,8 @@ SQL_TYPES = {
     "wall_seconds": "REAL",
     "cpu_seconds": "REAL",
     "cpu_percent": "REAL",
-    "peak_pss_mb": "REAL",
+    "peak_memory_mb": "REAL",
+    "memory_metric": "TEXT",
     "page_rows": "INTEGER",
     "test_rows": "INTEGER",
     "date_rows": "INTEGER",

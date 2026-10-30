@@ -2,6 +2,7 @@
 
 import resource
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -29,12 +30,15 @@ VERSION_CODE = (
     "    print('PGVER=unknown')\n"
 )
 
+MEMORY_METRIC = "pss" if sys.platform == "linux" else "rss"
+
 
 @dataclass
 class Measurement:
     wall_seconds: float | None = None
     cpu_seconds: float | None = None
-    peak_pss_mb: float | None = None
+    peak_memory_mb: float | None = None
+    memory_metric: str | None = None
     returncode: int | None = None
     error: str | None = None
 
@@ -68,9 +72,9 @@ def get_versions(interpreter):
     return versions["PYVER"], versions["PGVER"]
 
 
-def tree_pss_bytes(root_pid):
-    """Summed PSS of a process and its descendants.
-
+def tree_memory_bytes(root_pid):
+    """Sum process-tree memory using PSS on Linux and RSS elsewhere.
+    
     Jython launches Java as a child process, so the root PID alone
     would miss the JVM.
     """
@@ -83,9 +87,13 @@ def tree_pss_bytes(root_pid):
     total = 0
     for process in processes:
         try:
-            total += process.memory_full_info().pss
+            if MEMORY_METRIC == "pss":
+                total += process.memory_full_info().pss
+            else:
+                total += process.memory_info().rss
         except PSUTIL_ERRORS:
             pass
+
     return total
 
 
@@ -101,7 +109,7 @@ def run_child(command, environment):
     """
     cpu_start = cpu_time()
     wall_start = time.perf_counter()
-    peak_pss = 0
+    peak_memory = 0
 
     try:
         with tempfile.TemporaryFile("w+") as out, tempfile.TemporaryFile("w+") as err:
@@ -114,7 +122,7 @@ def run_child(command, environment):
                 text=True,
             )
             while process.poll() is None:
-                peak_pss = max(peak_pss, tree_pss_bytes(process.pid))
+                peak_memory = max(peak_memory, tree_memory_bytes(process.pid))
                 time.sleep(POLL_INTERVAL)
 
             out.seek(0)
@@ -127,7 +135,8 @@ def run_child(command, environment):
     return Measurement(
         wall_seconds=time.perf_counter() - wall_start,
         cpu_seconds=cpu_time() - cpu_start,
-        peak_pss_mb=peak_pss / (1024 * 1024) or None,
+        peak_memory_mb=peak_memory / (1024 * 1024) or None,
+        memory_metric=MEMORY_METRIC,
         returncode=process.returncode,
         error=output[-ERROR_TAIL_CHARS:] if failed and output else None,
     )

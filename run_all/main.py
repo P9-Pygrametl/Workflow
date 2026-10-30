@@ -2,9 +2,9 @@
 
 Each run is a subprocess so CPython 3.14, free-threaded CPython 3.14t,
 and Jython can be compared in one invocation. The warehouse is reset
-before every run, and wall time, CPU time, peak proportional memory,
-and warehouse row counts are recorded in one SQLite table. Each run is
-checked for orphaned facts and, by default, its warehouse fingerprint
+before every run, and wall time, CPU time, peak memory (PSS on Linux,
+RSS on macOS), and warehouse row counts are recorded in one SQLite table. 
+Each run is checked for orphaned facts and, by default, its warehouse fingerprint
 is compared with the sequential cpygrametl1_db run.
 
 Example:
@@ -94,7 +94,8 @@ def run_mode(
         wall_seconds=measurement.wall_seconds,
         cpu_seconds=measurement.cpu_seconds,
         cpu_percent=measurement.cpu_percent,
-        peak_pss_mb=measurement.peak_pss_mb,
+        peak_memory_mb=measurement.peak_memory_mb,
+        memory_metric=measurement.memory_metric,
         page_rows=state["page"],
         test_rows=state["test"],
         date_rows=state["date"],
@@ -118,7 +119,7 @@ def print_outcome(result: RunResult, errors: list[str]) -> None:
         print(
             f"  wall={result.wall_seconds:.2f}s "
             f"cpu={result.cpu_seconds:.2f}s "
-            f"pss={result.peak_pss_mb or 0:.1f}MB "
+            f"{result.memory_metric}={result.peak_memory_mb or 0:.1f}MiB "
             f"facts={result.fact_rows}"
         )
     else:
