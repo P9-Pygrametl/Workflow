@@ -1,11 +1,14 @@
 import datetime
 import os
+import sys
 import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import psycopg
 import pygrametl
 from dotenv import load_dotenv
-
 from pygrametl import ConnectionWrapper, PipelinedConnectionWrapper
 from pygrametl.datasources import MergeJoiningSource, SQLSource
 from pygrametl.tables import (
@@ -14,55 +17,9 @@ from pygrametl.tables import (
     SlowlyChangingDimension,
 )
 
+from helpers.helpers import datehandling, extractdomaininfo, extractserverinfo
 
 load_dotenv()
-
-
-def datehandling(row, namemapping):
-    # This method is called from ensure(row) when the lookup of a date fails.
-    # We have to calculate all date related fields and add them to the row.
-    date = pygrametl.getvalue(row, "date", namemapping)
-
-    (
-        year,
-        month,
-        day,
-        hour,
-        minute,
-        second,
-        weekday,
-        dayinyear,
-        dst,
-    ) = time.strptime(date, "%Y-%m-%d")
-
-    isoyear, isoweek, isoweekday = datetime.date(
-        year,
-        month,
-        day,
-    ).isocalendar()
-
-    row["day"] = day
-    row["month"] = month
-    row["year"] = year
-    row["week"] = isoweek
-    row["weekyear"] = isoyear
-    row["dateid"] = dayinyear + 366 * (year - 1990)
-
-    return row
-
-
-def extractdomaininfo(row):
-    # Take the 'www.domain.org' part from 'http://www.domain.org/page.html'.
-    domaininfo = row["url"].split("/")[-2]
-    row["domain"] = domaininfo
-
-    # Take the top level which is the last part of the domain.
-    row["topleveldomain"] = domaininfo.split(".")[-1]
-
-
-def extractserverinfo(row):
-    # Find the server name from a string like "ServerName/Version".
-    row["server"] = row["serverversion"].split("/")[0]
 
 
 def create_etl():
@@ -77,16 +34,12 @@ def create_etl():
     try:
         source_port = int(source_port_value)
     except ValueError:
-        raise ValueError(
-            f"SOURCE_PORT must be an integer, got {source_port_value!r}"
-        )
+        raise ValueError(f"SOURCE_PORT must be an integer, got {source_port_value!r}")
 
     try:
         dw_port = int(dw_port_value)
     except ValueError:
-        raise ValueError(
-            f"DW_PORT must be an integer, got {dw_port_value!r}"
-        )
+        raise ValueError(f"DW_PORT must be an integer, got {dw_port_value!r}")
 
     # Connection to target DW
     pgconn = psycopg.connect(
@@ -128,7 +81,7 @@ def create_etl():
             f"WITH (FORMAT text, DELIMITER '{fieldsep}', NULL '{nullval}')"
         )
         raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
-        
+
         with connection.suspended_pipeline():
             with pgconn.cursor().copy(sql) as copy:
                 for chunk in iter(lambda: raw.read(1 << 20), b""):
