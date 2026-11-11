@@ -67,19 +67,37 @@ MODES = [
         CPYTHON_NOGIL,
         ["-m", "shared.cpygrametl1_db"],
     ),
-    Mode("cpygrametl2_db", "cpython-3.14", CPYTHON, ["-m", "shared.cpygrametl2_db"]),
+    Mode("cpygrametl2_db",
+         "cpython-3.14", 
+         CPYTHON,
+         ["-m", "shared.cpygrametl2_db"]
+    ),
     Mode(
         "cpygrametl2_db",
         "cpython-3.14t",
         CPYTHON_NOGIL,
         ["-m", "shared.cpygrametl2_db"],
     ),
+
     Mode(
-        "pipeline",
+        "pipeline sequential",
         "cpython-3.14",
         CPYTHON,
-        ["pipelined_workflows/cpygrametl1_db_pipelined.py"],
+        ["-m", "pipelined.pipelined_sequential"],
     ),
+    Mode(
+        "pipeline multiprocessing",
+        "cpython-3.14",
+        CPYTHON,
+        ["-m", "pipelined.pipelined_parallel"],
+    ),
+    Mode(
+        "pipeline free-threading",
+        "cpython-3.14t",
+        CPYTHON_NOGIL,
+        ["-m", "pipelined.pipelined_parallel"],
+    ),
+
     Mode("jython1", "jython-2.7", JYTHON, ["jython/pygrametl1.py"]),
     Mode("jython2", "jython-2.7", JYTHON, ["jython/pygrametl2.py"]),
 ]

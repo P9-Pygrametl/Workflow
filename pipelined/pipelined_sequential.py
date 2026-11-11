@@ -1,23 +1,23 @@
-import datetime
 import os
-import sys
 import time
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import psycopg
 import pygrametl
 from dotenv import load_dotenv
-from pygrametl import ConnectionWrapper, PipelinedConnectionWrapper
+
+from pygrametl import PipelinedConnectionWrapper
 from pygrametl.datasources import MergeJoiningSource, SQLSource
 from pygrametl.tables import (
     BulkFactTable,
     CachedDimension,
     SlowlyChangingDimension,
 )
+from helpers.helpers import (
+    datehandling,
+    extractdomaininfo,
+    extractserverinfo,
+)
 
-from helpers.helpers import datehandling, extractdomaininfo, extractserverinfo
 
 load_dotenv()
 
@@ -33,13 +33,17 @@ def create_etl():
 
     try:
         source_port = int(source_port_value)
-    except ValueError:
-        raise ValueError(f"SOURCE_PORT must be an integer, got {source_port_value!r}")
+    except ValueError as exc:
+        raise ValueError(
+            f"SOURCE_PORT must be an integer, got {source_port_value!r}"
+        ) from exc
 
     try:
         dw_port = int(dw_port_value)
-    except ValueError:
-        raise ValueError(f"DW_PORT must be an integer, got {dw_port_value!r}")
+    except ValueError as exc:
+        raise ValueError(
+            f"DW_PORT must be an integer, got {dw_port_value!r}"
+        ) from exc
 
     # Connection to target DW
     pgconn = psycopg.connect(
@@ -50,7 +54,6 @@ def create_etl():
     )
 
     connection = PipelinedConnectionWrapper(pgconn)
-    connection.setasdefault()
     connection.execute("SET search_path TO pygrametlexa")
 
     # Connections to source database
@@ -82,10 +85,9 @@ def create_etl():
         )
         raw = getattr(filehandle, "buffer", filehandle)  # binary if possible
 
-        with connection.suspended_pipeline():
-            with pgconn.cursor().copy(sql) as copy:
-                for chunk in iter(lambda: raw.read(1 << 20), b""):
-                    copy.write(chunk)
+        with connection.cursor().copy(sql) as copy:
+            for chunk in iter(lambda: raw.read(1 << 20), b""):
+                copy.write(chunk)
 
     # Dimension and fact table objects
     pagedim = SlowlyChangingDimension(
