@@ -77,7 +77,7 @@ MODES = [
 
     Mode(
         "pipeline sequential",
-        "cpython-3.14",
+        "cpython-3.15",
         CPYTHON,
         ["-m", "pipelined.pipelined_sequential"],
     ),
@@ -89,7 +89,7 @@ MODES = [
     ),
     Mode(
         "pipeline free-threading",
-        "cpython-3.14t",
+        "cpython-3.15t",
         CPYTHON_NOGIL,
         ["-m", "pipelined.pipelined_parallel"],
     ),
