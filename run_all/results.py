@@ -17,6 +17,7 @@ class RunResult:
     cpu_seconds: float | None = None
     cpu_percent: float | None = None
     peak_pss_mb: float | None = None
+    peak_rss_mb: float | None = None
     page_rows: int | None = None
     test_rows: int | None = None
     date_rows: int | None = None
@@ -46,6 +47,7 @@ SQL_TYPES = {
     "cpu_seconds": "REAL",
     "cpu_percent": "REAL",
     "peak_pss_mb": "REAL",
+    "peak_rss_mb": "REAL",
     "page_rows": "INTEGER",
     "test_rows": "INTEGER",
     "date_rows": "INTEGER",
