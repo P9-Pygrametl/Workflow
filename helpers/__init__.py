@@ -1,0 +1,1 @@
+"""Shared row transformation helpers."""
