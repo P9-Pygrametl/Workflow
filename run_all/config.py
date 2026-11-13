@@ -62,38 +62,29 @@ MODES = [
         oracle=True,
     ),
     Mode(
-        "cpygrametl1_db",
-        "cpython-3.15t",
-        CPYTHON_NOGIL,
-        ["-m", "shared.cpygrametl1_db"],
-    ),
-    Mode("cpygrametl2_db", "cpython-3.15", CPYTHON, ["-m", "shared.cpygrametl2_db"]),
-    Mode(
-        "cpygrametl2_db",
-        "cpython-3.15t",
-        CPYTHON_NOGIL,
-        ["-m", "shared.cpygrametl2_db"],
-    ),
-
-    Mode(
-        "pipeline sequential",
+        "cpygrametl1_async_db",
         "cpython-3.15",
         CPYTHON,
-        ["-m", "pipelined.pipelined_sequential"],
+        ["-m", "shared.cpygrametl1_async_db"],
     ),
     Mode(
-        "pipeline multiprocessing",
-        "cpython-3.15",
-        CPYTHON,
-        ["-m", "pipelined.pipelined_parallel"],
-    ),
-    Mode(
-        "pipeline free-threading",
+        "cpygrametl1_async_db",
         "cpython-3.15t",
         CPYTHON_NOGIL,
-        ["-m", "pipelined.pipelined_parallel"],
+        ["-m", "shared.cpygrametl1_async_db"],
     ),
-
+    Mode(
+        "cpygrametl2_async_db",
+        "cpython-3.15",
+        CPYTHON,
+        ["-m", "shared.cpygrametl2_async_db"],
+    ),
+    Mode(
+        "cpygrametl2_async_db",
+        "cpython-3.15t",
+        CPYTHON_NOGIL,
+        ["-m", "shared.cpygrametl2_async_db"],
+    ),
     Mode("jython1", "jython-2.7", JYTHON, ["jython/pygrametl1.py"]),
     Mode("jython2", "jython-2.7", JYTHON, ["jython/pygrametl2.py"]),
 ]
