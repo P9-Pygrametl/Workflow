@@ -12,13 +12,13 @@ inspecting benchmark results.
 ## Requirements
 
 - Docker with the Compose plugin
-- Python 3 with `venv`
+- Python 3 using uv
 
 
 ## NoGIL Requirements
 For arch:
-- uv python install 3.14t
-- uv venv --python 3.14t .venv-t
+- uv python install 3.15 3.15t
+- uv venv --python 3.15t .venv-t
 - uv pip install --python .venv-t/bin/python -e /path/to/pygrametl
 - uv pip install --python .venv-t/bin/python -r requirements.txt
 - .venv-t/bin/python benchmarks/simple_bench.py
@@ -35,9 +35,10 @@ $EDITOR .env
 Create the virtual environment and install dependencies:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv run --python 3.15 python --version
+uv venv
+uv pip install --python .venv/bin/python -e /path/to/pygrametl
+uv pip install --python .venv/bin/python -r requirements.txt
 ```
 
 Start the containers:
