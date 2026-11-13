@@ -14,7 +14,6 @@ from pygrametl.tables import (
     BulkFactTable,
     CachedDimension,
     SlowlyChangingDimension,
-    PostgreSQLOptimizedSCD,
 )
 
 from helpers.helpers import (
@@ -28,7 +27,7 @@ load_dotenv()
 
 def get_prefetch():
     """Read the number of prefetched batches per asynchronous SQL source."""
-    raw = os.getenv("PREFETCH", "0")
+    raw = os.getenv("PREFETCH", "2")
     try:
         value = int(raw)
     except ValueError as error:
@@ -106,24 +105,20 @@ async def create_etl(prefetch=None):
         dbname=source_database,
         user=username,
     )
-    
-    scd_mode = os.getenv("SCD_MODE", "original").lower()
 
-    if scd_mode == "original":
-        dimension_class = SlowlyChangingDimension
-    elif scd_mode == "optimized":
-        dimension_class = PostgreSQLOptimizedSCD
-    else:
-        raise ValueError(
-            f"Unsupported SCD_MODE: {scd_mode!r}"
-        )
-
-    pagedim = dimension_class(
+    pagedim = SlowlyChangingDimension(
         name="page",
         key="pageid",
         attributes=[
-            "url", "size", "domain", "topleveldomain", "serverversion",
-            "server", "validfrom", "validto", "version",
+            "url",
+            "size",
+            "domain",
+            "topleveldomain",
+            "serverversion",
+            "server",
+            "validfrom",
+            "validto",
+            "version",
         ],
         lookupatts=["url"],
         versionatt="version",
