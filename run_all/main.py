@@ -14,6 +14,7 @@ Example:
 import argparse
 import os
 import sys
+import random
 import time
 from pathlib import Path
 
@@ -183,12 +184,11 @@ def run_page_size(
 
     results = []
     oracle = None
-    for mode in MODES:
-        versions = get_versions(mode.interpreter)
-
-        for run_number in range(1, repeats + 1):
+    for run_number in range(1, repeats + 1):
+        random.shuffle(MODES)
+        for mode in MODES:
             print(f"\n--- {mode.label} run {run_number}/{repeats} ---")
-            result = run_mode(store, mode, versions, pages, run_number, deep_validate)
+            result = run_mode(store, mode, get_versions(mode.interpreter), pages, run_number, deep_validate)
             results.append(result)
             if mode.oracle and oracle is None:
                 oracle = result
