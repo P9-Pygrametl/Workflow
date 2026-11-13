@@ -15,32 +15,16 @@ inspecting benchmark results.
 - Python 3 using uv
 
 
-## NoGIL Requirements
-For arch:
-- uv python install 3.15 3.15t
-- uv venv --python 3.15t .venv-t
-- uv pip install --python .venv-t/bin/python -e /path/to/pygrametl
-- uv pip install --python .venv-t/bin/python -r requirements.txt
-- .venv-t/bin/python benchmarks/simple_bench.py
-
 ## Setup
-
 Create your local environment file and set `USERNAME` to your system user:
 
+### env
 ```bash
 cp example.env .env
 $EDITOR .env
 ```
 
-Create the virtual environment and install dependencies:
-
-```bash
-uv run --python 3.15 python --version
-uv venv
-uv pip install --python .venv/bin/python -e /path/to/pygrametl
-uv pip install --python .venv/bin/python -r requirements.txt
-```
-
+### Docker
 Start the containers:
 
 ```bash
@@ -49,6 +33,30 @@ docker compose ps
 ```
 
 Wait until `source-db` and `dw-db` both report `healthy`.
+
+### venv
+Create the virtual environment and install dependencies:
+```bash
+uv python install 3.15 3.15t
+
+uv venv --python 3.15 .venv --clear
+uv pip install --python .venv/bin/python -e ../pygrametl #/path/to/pygrametl
+uv pip install --python .venv/bin/python -r requirements.txt
+
+uv venv --python 3.15t .venv-t --clear
+uv pip install --python .venv-t/bin/python -e ../pygrametl #/path/to/pygrametl
+uv pip install --python .venv-t/bin/python -r requirements.txt
+```
+
+### Running it 
+
+```bash
+# Run with default:
+.venv/bin/python -m run_all.main 
+
+# Or with explicit page size and repeat:
+.venv/bin/python -m run_all.main --page-sizes 25 50 75 100 --repeats 10 
+```
 
 ## Ports
 
