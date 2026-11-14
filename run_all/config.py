@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 load_dotenv(ROOT / ".env")
 
 RESULTS_DB = ROOT / "data" / "results.db"
+RESULTS_CSV = ROOT / "data" / "runs.csv"
 SCHEMA_FILE = ROOT / "starschema.sql"
 
 DW_CONFIG = {
