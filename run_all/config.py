@@ -62,6 +62,30 @@ MODES = [
         oracle=True,
     ),
     Mode(
+        "cpygrametl1_db",
+        "cpython-3.15t",
+        CPYTHON_NOGIL,
+        ["-m", "shared.cpygrametl1_db"],
+    ),
+    Mode(
+        "cpygrametl2_db",
+        "cpython-3.15",
+        CPYTHON,
+        ["-m", "shared.cpygrametl2_db"],
+    ),
+    Mode(
+        "cpygrametl2_db",
+        "cpython-3.15t",
+        CPYTHON_NOGIL,
+        ["-m", "shared.cpygrametl2_db"],
+    ),
+    Mode(
+        "cpygrametl2_db",
+        "cpython-3.15t",
+        CPYTHON_NOGIL,
+        ["-m", "shared.cpygrametl2_db"],
+    ),
+    Mode(
         "cpygrametl1_async_db",
         "cpython-3.15",
         CPYTHON,
