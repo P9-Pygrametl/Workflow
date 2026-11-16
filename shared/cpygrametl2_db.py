@@ -35,6 +35,7 @@ from helpers.helpers import (
 
 BATCHSIZE = 500
 
+
 def create_etl():
     username = os.getenv("USERNAME")
     source_database = os.getenv("SOURCE_DATABASE")
@@ -47,9 +48,7 @@ def create_etl():
     try:
         source_port = int(source_port_value)
     except ValueError:
-        raise ValueError(
-            f"SOURCE_PORT must be an integer, got {source_port_value!r}"
-        )
+        raise ValueError(f"SOURCE_PORT must be an integer, got {source_port_value!r}")
 
     try:
         dw_port = int(dw_port_value)
@@ -193,12 +192,11 @@ def create_etl():
         fetchsize=5000,
     )
 
-    joineddata = MergeJoiningSource(
-        downloadlog, "localfile", testresults, "localfile"
-    )
+    joineddata = MergeJoiningSource(downloadlog, "localfile", testresults, "localfile")
 
-    transformeddata = TransformingSource(joineddata, extractdomaininfo, 
-                                     extractserverinfo, convertsize)
+    transformeddata = TransformingSource(
+        joineddata, extractdomaininfo, extractserverinfo, convertsize
+    )
 
     # ProcessSource will also spawn worker threads.
     inputdata = ProcessSource(transformeddata, batchsize=BATCHSIZE, queuesize=10)
@@ -238,17 +236,10 @@ def run_etl(
 
         shrdconn.commit()
     finally:
-        # Explicitly close and join the processes of the decoupled tables
-        # before closing the core database connections.
-        try:
-            pagedim.close()
-        except Exception:
-            pass
-
-        try:
-            facttbl.close()
-        except Exception:
-            pass
+        # Stop the decoupled workers before closing the connections.
+        for part in pagedim.parts:
+            part.shutdowndecoupled()
+        facttbl.shutdowndecoupled()
 
         # Close all data sources and connections
         sourceconn1.close()
