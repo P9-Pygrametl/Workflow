@@ -1,8 +1,9 @@
 """Paths, database settings, and the list of implementations to benchmark."""
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Mapping
 
 from dotenv import load_dotenv
 
@@ -12,12 +13,20 @@ load_dotenv(ROOT / ".env")
 
 RESULTS_DB = ROOT / "data" / "results.db"
 RESULTS_CSV = ROOT / "data" / "runs.csv"
+TUNED_FILE = ROOT / "data" / "tuned.json"
 SCHEMA_FILE = ROOT / "starschema.sql"
 
 DW_CONFIG = {
     "host": os.getenv("DW_HOST", "localhost"),
     "port": int(os.getenv("DW_PORT", "5432")),
     "dbname": os.getenv("DW_DATABASE"),
+    "user": os.getenv("USERNAME"),
+}
+
+SOURCE_CONFIG = {
+    "host": os.getenv("SOURCE_HOST", "localhost"),
+    "port": int(os.getenv("SOURCE_PORT", "5432")),
+    "dbname": os.getenv("SOURCE_DATABASE"),
     "user": os.getenv("USERNAME"),
 }
 
@@ -44,14 +53,30 @@ class Mode:
     interpreter: list[str]
     args: list[str]
     oracle: bool = False
+    heap: str | None = None
+    env: Mapping[str, str] = field(default_factory=dict)
+    params: Mapping[str, object] = field(default_factory=dict)
+    profile: str = "default"
 
     @property
     def command(self):
-        return self.interpreter + self.args
+        interpreter = list(self.interpreter)
+
+        if self.heap is not None:
+            interpreter = [
+                arg for arg in interpreter if not arg.startswith("-J-Xmx")
+            ]
+            interpreter.insert(1, f"-J-Xmx{self.heap}")
+
+        return interpreter + self.args
 
     @property
     def label(self):
         return f"{self.implementation} ({self.runtime})"
+
+    @property
+    def key(self):
+        return f"{self.implementation}@{self.runtime}"
 
 
 MODES = [

@@ -12,6 +12,7 @@ Example:
 """
 
 import argparse
+import json
 import os
 import sys
 import random
@@ -23,9 +24,17 @@ import psycopg
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from datagenerator.datagenerator_db import generate
-from run_all.config import DW_CONFIG, MODES, RESULTS_DB, SCHEMA_FILE, Mode
+from run_all.config import (
+    DW_CONFIG,
+    MODES,
+    RESULTS_DB,
+    SCHEMA_FILE,
+    TUNED_FILE,
+    Mode,
+)
 from run_all.measure import get_versions, run_child
 from run_all.results import ResultsStore, RunResult
+from run_all.tuning import apply_params, build_environment
 from run_all.validation import validate, warehouse_state
 
 
@@ -58,6 +67,17 @@ def parse_args() -> argparse.Namespace:
             "(exit code, row counts, orphaned facts) still run."
         ),
     )
+    parser.add_argument(
+        "--tuned",
+        type=Path,
+        default=TUNED_FILE,
+        help=f"Tuned parameter profile (default: {TUNED_FILE}).",
+    )
+    parser.add_argument(
+        "--defaults",
+        action="store_true",
+        help="Ignore the tuned profile and use implementation defaults.",
+    )
     args = parser.parse_args()
 
     invalid = [size for size in args.page_sizes if size < 1]
@@ -67,6 +87,26 @@ def parse_args() -> argparse.Namespace:
         parser.error("--repeats must be at least 1")
 
     return args
+
+
+def load_profile(path: Path) -> dict:
+    """Read a tuned profile, returning an empty mapping when absent."""
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+
+def apply_profile(mode: Mode, profile: dict, source: str) -> Mode:
+    """Return the mode with its tuned parameters applied, if present."""
+    entry = profile.get(mode.key)
+    if not entry:
+        return mode
+
+    params = entry.get("params")
+    if not params:
+        return mode
+
+    return apply_params(mode, params, profile=f"tuned:{source}")
 
 
 def run_mode(
@@ -81,7 +121,8 @@ def run_mode(
     with psycopg.connect(**DW_CONFIG) as connection:
         connection.execute(SCHEMA_FILE.read_text())
 
-    measurement = run_child(mode.command, os.environ.copy())
+    environment = build_environment(os.environ, mode.env)
+    measurement = run_child(mode.command, environment)
     state = warehouse_state(deep_validate=deep_validate, config=DW_CONFIG)
     errors = validate(measurement, state, deep_validate)
 
@@ -108,6 +149,8 @@ def run_mode(
         runtime_version=runtime_version,
         returncode=measurement.returncode,
         error=measurement.error,
+        params=json.dumps(dict(mode.params), sort_keys=True) if mode.params else None,
+        profile=mode.profile,
     )
     store.save(result)
 
@@ -191,6 +234,8 @@ def run_page_size(
     pages: int,
     repeats: int,
     deep_validate: bool,
+    profile: dict,
+    profile_source: str,
 ) -> list[RunResult]:
     """Generate data for one page size and run every mode against it."""
     print(f"\n=== Workload size: {pages} pages ===")
@@ -201,7 +246,10 @@ def run_page_size(
     for run_number in range(1, repeats + 1):
         random.shuffle(MODES)
         for mode in MODES:
+            mode = apply_profile(mode, profile, profile_source)
             print(f"\n--- {mode.label} run {run_number}/{repeats} ---")
+            if mode.profile != "default":
+                print(f"  profile={mode.profile} params={dict(mode.params)}")
             result = run_mode(store, mode, get_versions(mode.interpreter), pages, run_number, deep_validate)
             results.append(result)
             if mode.oracle and oracle is None:
@@ -217,10 +265,27 @@ def main() -> int:
     args = parse_args()
     deep_validate = not args.no_deep_validate
 
+    if args.defaults:
+        profile = {}
+        print("Tuned profile: ignored (--defaults)")
+    else:
+        profile = load_profile(args.tuned)
+        if profile:
+            print(f"Tuned profile: {args.tuned.resolve()}")
+        else:
+            print(f"Tuned profile: none at {args.tuned.resolve()}")
+
     all_results = []
     with ResultsStore() as store:
         for pages in args.page_sizes:
-            all_results += run_page_size(store, pages, args.repeats, deep_validate)
+            all_results += run_page_size(
+                store,
+                pages,
+                args.repeats,
+                deep_validate,
+                profile,
+                args.tuned.name,
+            )
 
     failed = any(not r.succeeded or not r.valid for r in all_results)
 

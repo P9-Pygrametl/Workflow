@@ -17,8 +17,13 @@ from helpers.helpers import (
     extractdomaininfo,
     extractserverinfo,
 )
+from helpers.params import get_int
 
 load_dotenv()
+
+BULKSIZE = get_int("ETL_BULKSIZE", 250000)
+FETCHSIZE = get_int("ETL_FETCHSIZE", 5000)
+
 
 def create_etl():
     username = os.getenv("USERNAME")
@@ -145,7 +150,7 @@ def create_etl():
         keyrefs=["pageid", "testid", "dateid"],
         measures=["errors"],
         bulkloader=pgcopybulkloader,
-        bulksize=250000,
+        bulksize=BULKSIZE,
     )
 
     # Data sources
@@ -163,7 +168,7 @@ def create_etl():
             ORDER BY localfile
         """,
         cursorarg="downloadlog_cursor",
-        fetchsize=5000,
+        fetchsize=FETCHSIZE,
     )
 
     testresults = SQLSource(
@@ -177,7 +182,7 @@ def create_etl():
             ORDER BY localfile, test
         """,
         cursorarg="testresults_cursor",
-        fetchsize=5000,
+        fetchsize=FETCHSIZE,
     )
 
     inputdata = MergeJoiningSource(

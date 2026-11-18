@@ -58,6 +58,40 @@ uv pip install --python .venv-t/bin/python -r requirements.txt
 .venv/bin/python -m run_all.main --page-sizes 25 50 75 100 --repeats 10 
 ```
 
+Benchmarks load `data/tuned.json` when it exists. Use `--defaults` to ignore
+the tuned profile, or `--tuned path.json` to select another one.
+
+### Tuning the implementations
+
+`run_all.tune` uses coordinate descent: for each mode it evaluates every
+level of one knob while the others are fixed, repeating passes until the
+configuration stops changing. The default is three repeats per level and at
+most three passes.
+
+```bash
+# See the search plan without running it:
+.venv/bin/python -m run_all.tune --dry-run
+
+# Measure the default configuration at the target size before committing:
+.venv/bin/python -m run_all.tune --probe --pages 100 --repeats 1
+
+# Full search at 100 pages:
+.venv/bin/python -m run_all.tune --pages 100 --repeats 3
+
+# Smoke-test two modes at a small size, without touching data/tuned.json:
+.venv/bin/python -m run_all.tune \
+  --pages 1 --repeats 1 --passes 1 \
+  --modes cpygrametl1_db@cpython-3.15 jython2@jython-2.7 \
+  --output /tmp/opencode/tuned-smoke.json \
+  --db /tmp/opencode/tuning-smoke.db
+```
+
+Every trial is written to `data/tuning.db`, and the winner for each mode is
+merged into `data/tuned.json`. Re-running the command resumes from the trial
+database; add `--skip-generate` to reuse the existing source data, or
+`--fresh` to delete the trial database and start over.
+
+
 ## Ports
 
 | Port  | Service                                  |

@@ -52,8 +52,13 @@ import java.lang
 loadenv()
 
 
-BATCHSIZE = int(os.environ.get("JYTHON_BATCHSIZE", "500"))
-QUEUESIZE = int(os.environ.get("JYTHON_QUEUESIZE", "10"))
+BATCHSIZE = int(
+    os.environ.get("ETL_BATCHSIZE", os.environ.get("JYTHON_BATCHSIZE", "500"))
+)
+QUEUESIZE = int(
+    os.environ.get("ETL_QUEUESIZE", os.environ.get("JYTHON_QUEUESIZE", "10"))
+)
+BULKSIZE = int(os.environ.get("ETL_BULKSIZE", "250000"))
 PAGE_PARTS = int(os.environ.get("JYTHON_PAGE_PARTS", "2"))
 CACHESIZE = int(os.environ.get("JYTHON_CACHESIZE", "-1"))
 PROCESS_BATCHSIZE = int(os.environ.get("JYTHON_PROCESS_BATCHSIZE", str(BATCHSIZE)))
@@ -147,7 +152,7 @@ facttbl = DecoupledFactTable(
         name="testresults",
         keyrefs=["pageid", "testid", "dateid"],
         measures=["errors"],
-        bulksize=250000,
+        bulksize=BULKSIZE,
         bulkloader=shrdconn.copy().pgbulkloader,
         usefilename=True,
     ),

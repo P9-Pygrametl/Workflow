@@ -21,8 +21,12 @@ from helpers.helpers import (
     extractdomaininfo,
     extractserverinfo,
 )
+from helpers.params import get_int
 
 load_dotenv()
+
+BULKSIZE = get_int("ETL_BULKSIZE", 250000)
+FETCHSIZE = get_int("ETL_FETCHSIZE", 5000)
 
 
 def get_prefetch():
@@ -152,7 +156,7 @@ async def create_etl(prefetch=None):
         keyrefs=["pageid", "testid", "dateid"],
         measures=["errors"],
         bulkloader=pgcopybulkloader,
-        bulksize=250000,
+        bulksize=BULKSIZE,
     )
 
     # A positive prefetch depth buffers that many batches per source.
@@ -170,7 +174,7 @@ async def create_etl(prefetch=None):
             ORDER BY localfile
         """,
         cursorarg="downloadlog_cursor",
-        fetchsize=5000,
+        fetchsize=FETCHSIZE,
         prefetch=prefetch,
     )
 
@@ -185,7 +189,7 @@ async def create_etl(prefetch=None):
             ORDER BY localfile, test
         """,
         cursorarg="testresults_cursor",
-        fetchsize=5000,
+        fetchsize=FETCHSIZE,
         prefetch=prefetch,
     )
 

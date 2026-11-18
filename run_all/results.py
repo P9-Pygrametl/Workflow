@@ -32,6 +32,8 @@ class RunResult:
     runtime_version: str | None = None
     returncode: int | None = None
     error: str | None = None
+    params: str | None = None
+    profile: str | None = None
     id: int | None = None
 
     @property
@@ -62,6 +64,8 @@ SQL_TYPES = {
     "runtime_version": "TEXT",
     "returncode": "INTEGER",
     "error": "TEXT",
+    "params": "TEXT",
+    "profile": "TEXT",
 }
 
 
