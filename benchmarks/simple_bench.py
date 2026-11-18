@@ -34,19 +34,44 @@ except ValueError as error:
         f"DW_PORT must be an integer, got {DW_PORT_RAW!r}"
     ) from error
 
-PHASES = [
+# Top-level non-overlapping phases whose wall times sum to total wall time
+MAJOR_PHASES = [
     "data_generation",
     "schema_reset",
     "initialisation",
+    "etl_loop",
+    "commit",
+    "connection_close",
+]
+
+# Parent-thread sub-timings inside etl_loop (for bottleneck breakdown only;
+# decoupled tables reflect enqueue time rather than worker execution time)
+SUB_PHASES = [
     "extraction_merge",
     "transformation",
     "page_dimension",
     "date_dimension",
     "test_dimension",
     "fact_insert",
-    "commit",
-    "connection_close",
 ]
+
+
+def get_tree_cpu_seconds(root_pid):
+    """Returns cumulative (user + system) CPU seconds for the root process and all active children."""
+    total = 0.0
+    try:
+        root = psutil.Process(root_pid)
+        procs = [root] + root.children(recursive=True)
+    except psutil.Error:
+        return 0.0
+
+    for proc in procs:
+        try:
+            times = proc.cpu_times()
+            total += times.user + times.system
+        except psutil.Error:
+            pass
+    return total
 
 
 def reset_warehouse():
@@ -68,64 +93,67 @@ def reset_warehouse():
 
 
 def monitor_resources(stop_event, stats, interval=0.05):
-    """Monitors RSS, PSS, and CPU usage of the active process tree in the background."""
+    """Monitors total RSS, PSS, and CPU usage across the entire active process tree."""
     root_pid = os.getpid()
     samples = []
-    
-    # Keep a persistent cache of Process objects so their CPU counters persist
     process_cache = {}
+    reaped_cpu_time = 0.0
+    last_cpu_time = {}
 
     while not stop_event.is_set():
         timestamp = time.perf_counter()
-        
+
         try:
             root_proc = psutil.Process(root_pid)
-            # Find current active processes in the tree
-            active_pids = [root_pid] + [p.pid for p in root_proc.children(recursive=True)]
+            active_procs = [root_proc] + root_proc.children(recursive=True)
+            active_pids = {p.pid for p in active_procs}
         except psutil.Error:
             break
 
-        # Clean up cached processes that are no longer active
+        # Reap final CPU seconds from children that exited since the last sample
         for pid in list(process_cache.keys()):
             if pid not in active_pids:
+                reaped_cpu_time += last_cpu_time.pop(pid, 0.0)
                 del process_cache[pid]
 
-        # Populate/retrieve from cache
-        for pid in active_pids:
-            if pid not in process_cache:
+        for proc in active_procs:
+            if proc.pid not in process_cache:
                 try:
-                    p = psutil.Process(pid)
-                    # First call establishes the baseline comparison point
-                    p.cpu_percent(interval=None)
-                    process_cache[pid] = p
+                    proc.cpu_percent(interval=None)  # Initialize baseline
+                    process_cache[proc.pid] = proc
                 except psutil.Error:
                     pass
 
         total_cpu = 0.0
+        total_rss_mb = 0.0
+        total_pss_mb = 0.0
 
-        # Aggregate metrics across the cached process tree
         for pid, proc in list(process_cache.items()):
             try:
                 if proc.status() == psutil.STATUS_ZOMBIE:
                     continue
-                
-                # This second call now has a historical point of reference in the cache!
+
                 total_cpu += proc.cpu_percent(interval=None)
+                c_times = proc.cpu_times()
+                last_cpu_time[pid] = c_times.user + c_times.system
+
+                mem_info = proc.memory_full_info()
+                total_rss_mb += mem_info.rss / (1024 * 1024)
+                total_pss_mb += getattr(mem_info, "pss", mem_info.rss) / (
+                    1024 * 1024
+                )
             except psutil.Error:
-                # Process died since active_pids fetch
-                if pid in process_cache:
-                    del process_cache[pid]
+                reaped_cpu_time += last_cpu_time.pop(pid, 0.0)
+                process_cache.pop(pid, None)
 
-
-            mem_info = proc.memory_full_info()
-            rss_mb = mem_info.rss / (1024 * 1024)
-            pss_mb = (getattr(mem_info, "pss", mem_info.rss)) / (1024 * 1024)
+        cumulative_tree_cpu = reaped_cpu_time + sum(last_cpu_time.values())
 
         samples.append({
             "time": timestamp,
-            "rss_mb": rss_mb,
-            "pss_mb": pss_mb,
+            "rss_mb": total_rss_mb,
+            "pss_mb": total_pss_mb,
             "cpu_percent": total_cpu,
+            "tree_cpu_time": cumulative_tree_cpu,
         })
 
         time.sleep(interval)
@@ -134,45 +162,40 @@ def monitor_resources(stop_event, stats, interval=0.05):
 
 
 def run_etl_worker(results_dict, exception_holder):
-    """Worker target that runs the ETL workload and times its phases.
-
-    Uses light local time calls on hot-paths to avoid blocking the DB loop.
-    """
+    """Worker target that runs the ETL workload and times its phases."""
     try:
-        # Structure to hold phase timestamps
-        phase_events = {phase: {"start": 0.0, "end": 0.0} for phase in PHASES}
-        timings = {phase: 0.0 for phase in PHASES}
-        timings_cpu = {phase: 0.0 for phase in PHASES}
+        root_pid = os.getpid()
+        phase_events = {
+            phase: {"start": 0.0, "end": 0.0} for phase in MAJOR_PHASES
+        }
+        timings = {phase: 0.0 for phase in MAJOR_PHASES + SUB_PHASES}
+        timings_cpu = {phase: 0.0 for phase in MAJOR_PHASES + SUB_PHASES}
 
-        # --- DATA GENERATION PHASE ---
-        phase_events["data_generation"]["start"] = time.perf_counter()
-        gen_wall_start = time.perf_counter()
-        gen_cpu_start = time.process_time()
+        def start_major(phase):
+            phase_events[phase]["start"] = time.perf_counter()
+            return time.perf_counter(), get_tree_cpu_seconds(root_pid)
 
+        def end_major(phase, w_start, c_start):
+            phase_events[phase]["end"] = time.perf_counter()
+            timings[phase] = phase_events[phase]["end"] - w_start
+            timings_cpu[phase] = max(
+                0.0, get_tree_cpu_seconds(root_pid) - c_start
+            )
+
+        # --- 1. DATA GENERATION PHASE ---
+        w0, c0 = start_major("data_generation")
         print(f"Generating source data for pages={PAGES}...")
         generate(PAGES)
+        end_major("data_generation", w0, c0)
 
-        timings["data_generation"] = time.perf_counter() - gen_wall_start
-        timings_cpu["data_generation"] = time.process_time() - gen_cpu_start
-        phase_events["data_generation"]["end"] = time.perf_counter()
-
-        # --- SCHEMA RESET PHASE ---
-        phase_events["schema_reset"]["start"] = time.perf_counter()
-        reset_wall_start = time.perf_counter()
-        reset_cpu_start = time.process_time()
-
+        # --- 2. SCHEMA RESET PHASE ---
+        w0, c0 = start_major("schema_reset")
         print("Resetting warehouse...")
         reset_warehouse()
+        end_major("schema_reset", w0, c0)
 
-        timings["schema_reset"] = time.perf_counter() - reset_wall_start
-        timings_cpu["schema_reset"] = time.process_time() - reset_cpu_start
-        phase_events["schema_reset"]["end"] = time.perf_counter()
-
-        # --- 1. INITIALISATION PHASE ---
-        phase_events["initialisation"]["start"] = time.perf_counter()
-        wall_start = time.perf_counter()
-        cpu_start = time.process_time()
-
+        # --- 3. INITIALISATION PHASE ---
+        w0, c0 = start_major("initialisation")
         (
             connection,
             sourceconn1,
@@ -183,78 +206,81 @@ def run_etl_worker(results_dict, exception_holder):
             testdim,
             facttbl,
         ) = create_etl()
+        end_major("initialisation", w0, c0)
 
-        timings["initialisation"] = time.perf_counter() - wall_start
-        timings_cpu["initialisation"] = time.process_time() - cpu_start
-        phase_events["initialisation"]["end"] = time.perf_counter()
-
-        # Wrap components using standard lightning-fast timing objects
+        # Wrap sub-operations for parent-side breakdown inside etl_loop
         timed_input = TimedIterable(inputdata, timings, timings_cpu)
-
         timed_getint = wrap_with_timing(
             pygrametl.getint, "transformation", timings, timings_cpu
         )
 
-        def record_start(phase):
-            if not phase_events[phase]["start"]:
-                phase_events[phase]["start"] = time.perf_counter()
+        # Intercept commit and close as distinct major phases
+        class LifecycleProxy:
+            def __init__(self, target):
+                self._target = target
 
-        def record_end(phase):
-            phase_events[phase]["end"] = time.perf_counter()
+            def commit(self):
+                cw0, cc0 = start_major("commit")
+                try:
+                    return self._target.commit()
+                finally:
+                    end_major("commit", cw0, cc0)
 
-        # Intercepting methods to capture physical phase start/end times
-        class InterceptProxy(TimedProxy):
-            def __init__(self, target, mapping, timings_dict, cpu_timings_dict):
-                super().__init__(
-                    target, mapping, timings_dict, cpu_timings_dict
-                )
-                self._mapping = mapping
+            def close(self):
+                # Accumulate across sourceconn1, sourceconn2, and shrdconn
+                if not phase_events["connection_close"]["start"]:
+                    phase_events["connection_close"]["start"] = (
+                        time.perf_counter()
+                    )
+                cw0 = time.perf_counter()
+                cc0 = get_tree_cpu_seconds(root_pid)
+                try:
+                    return self._target.close()
+                finally:
+                    phase_events["connection_close"]["end"] = (
+                        time.perf_counter()
+                    )
+                    timings["connection_close"] += (
+                        phase_events["connection_close"]["end"] - cw0
+                    )
+                    timings_cpu["connection_close"] += max(
+                        0.0, get_tree_cpu_seconds(root_pid) - cc0
+                    )
 
             def __getattr__(self, name):
-                attr = super().__getattr__(name)
-                phase = self._mapping.get(name)
-                if phase:
+                return getattr(self._target, name)
 
-                    def wrapper(*args, **kwargs):
-                        record_start(phase)
-                        try:
-                            return attr(*args, **kwargs)
-                        finally:
-                            record_end(phase)
-
-                    return wrapper
-                return attr
-
-        timed_pagedim = InterceptProxy(
+        timed_pagedim = TimedProxy(
             pagedim, {"scdensure": "page_dimension"}, timings, timings_cpu
         )
-        timed_datedim = InterceptProxy(
+        timed_datedim = TimedProxy(
             datedim, {"ensure": "date_dimension"}, timings, timings_cpu
         )
-        timed_testdim = InterceptProxy(
+        timed_testdim = TimedProxy(
             testdim, {"lookup": "test_dimension"}, timings, timings_cpu
         )
-        timed_facttbl = InterceptProxy(
+        timed_facttbl = TimedProxy(
             facttbl, {"insert": "fact_insert"}, timings, timings_cpu
         )
 
-        timed_connection = InterceptProxy(
-            connection,
-            {"commit": "commit", "close": "connection_close"},
-            timings,
-            timings_cpu,
-        )
-        timed_sourceconn1 = InterceptProxy(
-            sourceconn1, {"close": "connection_close"}, timings, timings_cpu
-        )
-        timed_sourceconn2 = InterceptProxy(
-            sourceconn2, {"close": "connection_close"}, timings, timings_cpu
-        )
+        timed_connection = LifecycleProxy(connection)
+        timed_sourceconn1 = LifecycleProxy(sourceconn1)
+        timed_sourceconn2 = LifecycleProxy(sourceconn2)
 
         print("Profiling ETL phases inside worker thread...")
 
-        phase_events["extraction_merge"]["start"] = time.perf_counter()
-        phase_events["transformation"]["start"] = time.perf_counter()
+        # --- 4. ETL LOOP PHASE (from start of run_etl until commit begins) ---
+        etl_w0, etl_c0 = start_major("etl_loop")
+
+        # Wrap run_etl so we close etl_loop right when commit starts
+        orig_commit = timed_connection.commit
+
+        def commit_with_etl_end():
+            if not phase_events["etl_loop"]["end"]:
+                end_major("etl_loop", etl_w0, etl_c0)
+            return orig_commit()
+
+        timed_connection.commit = commit_with_etl_end
 
         run_etl(
             timed_connection,
@@ -268,18 +294,10 @@ def run_etl_worker(results_dict, exception_holder):
             get_int=timed_getint,
         )
 
-        phase_events["extraction_merge"]["end"] = time.perf_counter()
-        phase_events["transformation"]["end"] = time.perf_counter()
+        # Fallback if commit was never called
+        if not phase_events["etl_loop"]["end"]:
+            end_major("etl_loop", etl_w0, etl_c0)
 
-        for phase in ["commit", "connection_close"]:
-            if not phase_events[phase]["start"]:
-                phase_events[phase]["start"] = phase_events[
-                    "extraction_merge"
-                ]["start"]
-            if not phase_events[phase]["end"]:
-                phase_events[phase]["end"] = time.perf_counter()
-
-        # Save successful outputs to sharing container
         results_dict.update({
             "phase_events": phase_events,
             "timings": timings,
@@ -294,7 +312,6 @@ def run_and_profile():
     results = {}
     exception_holder = {}
 
-    # Set up resource monitoring in a separate daemon thread
     stop_event = threading.Event()
     resource_stats = {}
     monitor_thread = threading.Thread(
@@ -306,7 +323,6 @@ def run_and_profile():
     print("Starting background resource monitor thread...")
     monitor_thread.start()
 
-    # Create and start the ETL worker thread
     etl_thread = threading.Thread(
         target=run_etl_worker,
         args=(results, exception_holder),
@@ -314,15 +330,11 @@ def run_and_profile():
 
     print("Starting target ETL worker thread...")
     etl_thread.start()
-
-    # Wait for the ETL thread to finish
     etl_thread.join()
 
-    # Stop monitoring now that the run has finished
     stop_event.set()
     monitor_thread.join()
 
-    # Handle exceptions if any occurred inside the worker thread
     if "error" in exception_holder:
         raise exception_holder["error"]
 
@@ -334,33 +346,35 @@ def run_and_profile():
     phase_events = results["phase_events"]
     timings = results["timings"]
     timings_cpu = results["timings_cpu"]
-
     samples = resource_stats.get("samples", [])
 
-    # Process overall statistics
-    rss_vals = [s["rss_mb"] for s in samples] if samples else []
-    pss_vals = [s["pss_mb"] for s in samples] if samples else []
-    cpu_vals = [s["cpu_percent"] for s in samples] if samples else []
+    rss_vals = [s["rss_mb"] for s in samples]
+    pss_vals = [s["pss_mb"] for s in samples]
+    cpu_vals = [s["cpu_percent"] for s in samples]
 
     max_rss = max(rss_vals) if rss_vals else 0.0
     avg_rss = sum(rss_vals) / len(rss_vals) if rss_vals else 0.0
-
     max_pss = max(pss_vals) if pss_vals else 0.0
     avg_pss = sum(pss_vals) / len(pss_vals) if pss_vals else 0.0
-
     avg_cpu = sum(cpu_vals) / len(cpu_vals) if cpu_vals else 0.0
 
-    # Calculate average and max memory per phase
+    # Calculate memory and tree CPU per non-overlapping major phase
     phase_memory = {}
-    for phase in PHASES:
+    for phase in MAJOR_PHASES:
         p_start = phase_events[phase]["start"]
         p_end = phase_events[phase]["end"]
-
         p_samples = [s for s in samples if p_start <= s["time"] <= p_end]
 
         if p_samples:
             rss_s = [s["rss_mb"] for s in p_samples]
             pss_s = [s["pss_mb"] for s in p_samples]
+            # Use monitor samples if child processes exited before end_major snapshot
+            sampled_cpu_delta = (
+                p_samples[-1]["tree_cpu_time"] - p_samples[0]["tree_cpu_time"]
+            )
+            if sampled_cpu_delta > timings_cpu[phase]:
+                timings_cpu[phase] = sampled_cpu_delta
+
             phase_memory[phase] = {
                 "rss_avg": sum(rss_s) / len(rss_s),
                 "rss_max": max(rss_s),
@@ -388,18 +402,18 @@ def run_and_profile():
     # Print Consolidated Results Report
     print("\n" + "=" * 105)
     print(
-        f"{'PHASE PROFILING & RESOURCE METRICS (WORKLOAD: ' + str(PAGES) + ' PAGES)':^105}"
+        f"{'MAJOR PHASE PROFILING & TREE RESOURCE METRICS (WORKLOAD: ' + str(PAGES) + ' PAGES)':^105}"
     )
     print("=" * 105)
-    total_wall = sum(timings.values())
+    total_wall = sum(timings[p] for p in MAJOR_PHASES)
 
     print(
-        f"  {'Phase':20} | {'Wall':8} | {'CPU Time':8} | "
+        f"  {'Major Phase':20} | {'Wall':11} | {'Tree CPU':8} | "
         f"{'Avg RSS':11} | {'Max RSS':11} | {'Avg PSS':11} | {'Max PSS':11}"
     )
     print("-" * 105)
 
-    for phase in PHASES:
+    for phase in MAJOR_PHASES:
         pct = (timings[phase] / total_wall * 100) if total_wall > 0 else 0.0
         wall_str = f"{timings[phase]:.2f}s ({pct:3.0f}%)"
         cpu_str = f"{timings_cpu[phase]:.2f}s"
@@ -426,19 +440,29 @@ def run_and_profile():
         )
 
         print(
-            f"  {phase:20} | {wall_str:10} | {cpu_str:8} | "
+            f"  {phase:20} | {wall_str:11} | {cpu_str:8} | "
             f"{rss_avg:11} | {rss_max:11} | {pss_avg:11} | {pss_max:11}"
         )
 
-    print("\n" + "=" * 105)
-    print(
-        f"'Total ETL Execution Time (excluding Data Generation/Reset): "
-        f"{total_wall - timings['data_generation'] - timings['schema_reset']:.2f}s'"
+    print("\n" + "-" * 105)
+    print(f"{'PARENT-THREAD SUB-TIMINGS INSIDE ETL LOOP (ENQUEUE / LOOKUP OVERHEAD)':^105}")
+    print("-" * 105)
+    for sub in SUB_PHASES:
+        print(
+            f"  {sub:20} | Wall: {timings[sub]:6.2f}s | Parent CPU: {timings_cpu[sub]:6.2f}s"
+        )
+
+    etl_only_wall = (
+        total_wall - timings["data_generation"] - timings["schema_reset"]
     )
     print("\n" + "=" * 105)
-    print(f"{'AGGREGATE HARDWARE PERFORMANCE':^105}")
+    print(
+        f"Total ETL Execution Time (excluding Data Generation/Reset): {etl_only_wall:.2f}s"
+    )
     print("=" * 105)
-    print(f"  Average Process CPU Utilisation:      {avg_cpu:6.2f}%")
+    print(f"{'AGGREGATE PROCESS TREE HARDWARE PERFORMANCE':^105}")
+    print("=" * 105)
+    print(f"  Average Process Tree CPU Utilisation: {avg_cpu:6.2f}%")
     print(
         f"  Average Resident Memory (RSS):        {avg_rss:6.2f} MB  |  "
         f"Peak Resident Memory (RSS): {max_rss:6.2f} MB"
