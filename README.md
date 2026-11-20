@@ -65,8 +65,10 @@ the tuned profile, or `--tuned path.json` to select another one.
 
 `run_all.tune` uses coordinate descent: for each mode it evaluates every
 level of one knob while the others are fixed, repeating passes until the
-configuration stops changing. The default is three repeats per level and at
-most three passes.
+configuration stops changing. The default is two repeats per level and at
+most three passes. After the search, it selects the configuration with the
+lowest median wall time among configurations measured at least four times,
+then confirms that configuration with two more runs.
 
 ```bash
 # See the search plan without running it:

@@ -2,10 +2,12 @@
 
 Every pass evaluates all levels of one knob while the other knobs are
 fixed. The current level is included in each sweep, so the comparison is
-made against a fresh measurement rather than an old baseline.
+made against a fresh measurement rather than an old baseline. After the
+search, the configuration with the lowest median wall time among those
+measured at least four times is selected and confirmed with fresh runs.
 
 Example:
-    .venv/bin/python -m run_all.tune --pages 100 --repeats 3
+    .venv/bin/python -m run_all.tune --pages 100 --repeats 2
 """
 
 import argparse
@@ -44,6 +46,7 @@ from run_all.validation import validate, warehouse_state
 
 
 TUNING_DB = ROOT / "data" / "tuning.db"
+MIN_SAMPLES = 4
 
 
 @dataclass
@@ -132,6 +135,20 @@ class TrialStore:
             ),
         )
         self.connection.commit()
+
+    def measurements(self, mode, pages):
+        """Return valid search measurements, excluding final confirmations."""
+        return self.connection.execute(
+            """
+            SELECT params, wall_seconds
+            FROM trials
+            WHERE mode = ? AND pages = ? AND valid = 1
+              AND wall_seconds IS NOT NULL
+              AND pass_index >= 1
+              AND knob != 'final'
+            """,
+            (mode, pages),
+        ).fetchall()
 
 
 def reset_warehouse():
@@ -324,7 +341,36 @@ def confirm_params(
     return statistics.median(values) if len(values) == repeats else None
 
 
-def tune_mode(mode, pages, repeats, passes, seed, store, expected_facts):
+def select_best(rows, min_samples=MIN_SAMPLES):
+    """Return the lowest-median configuration with enough measurements."""
+    groups = {}
+
+    for params, wall_seconds in rows:
+        groups.setdefault(params, []).append(wall_seconds)
+
+    candidates = {
+        params: statistics.median(walls)
+        for params, walls in groups.items()
+        if len(walls) >= min_samples
+    }
+
+    if not candidates:
+        return None, None, 0
+
+    best = min(candidates, key=candidates.get)
+    return json.loads(best), candidates[best], len(groups[best])
+
+
+def tune_mode(
+    mode,
+    pages,
+    repeats,
+    passes,
+    seed,
+    store,
+    expected_facts,
+    min_samples=MIN_SAMPLES,
+):
     params = default_params(mode)
     knobs = knobs_for(mode)
     completed_passes = 0
@@ -379,9 +425,26 @@ def tune_mode(mode, pages, repeats, passes, seed, store, expected_facts):
             print("  converged")
             break
 
+    selected, selected_median, samples = select_best(
+        store.measurements(mode.key, pages),
+        min_samples,
+    )
+
+    if selected is None:
+        selected = params
+        print(
+            f"  no configuration reached {min_samples} measurements; "
+            "keeping the search endpoint"
+        )
+    else:
+        print(
+            f"  selected: {json.dumps(selected, sort_keys=True)} "
+            f"(n={samples}, median={selected_median:.2f}s)"
+        )
+
     final_median = confirm_params(
         mode,
-        params,
+        selected,
         pages,
         passes + 1,
         repeats,
@@ -389,13 +452,16 @@ def tune_mode(mode, pages, repeats, passes, seed, store, expected_facts):
         expected_facts,
     )
 
-    print(f"  final: {json.dumps(params, sort_keys=True)}")
+    print(f"  final: {json.dumps(selected, sort_keys=True)}")
     if final_median is not None:
         print(f"  final median: {final_median:.2f}s")
     else:
         print("  final confirmation failed")
 
-    return params, final_median, completed_passes
+    if final_median is None:
+        final_median = selected_median
+
+    return selected, final_median, completed_passes
 
 
 def update_profile(path, mode, params, pages, repeats, passes, median):
@@ -445,9 +511,18 @@ def parse_args():
         )
     )
     parser.add_argument("--pages", type=int, default=100)
-    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--passes", type=int, default=3)
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument(
+        "--min-samples",
+        type=int,
+        default=MIN_SAMPLES,
+        help=(
+            "Minimum measurements before a configuration is eligible "
+            f"for selection (default: {MIN_SAMPLES})."
+        ),
+    )
     parser.add_argument(
         "--output",
         type=Path,
@@ -493,6 +568,8 @@ def parse_args():
         parser.error("--repeats must be at least 1")
     if args.passes < 1:
         parser.error("--passes must be at least 1")
+    if args.min_samples < 1:
+        parser.error("--min-samples must be at least 1")
 
     return args
 
@@ -567,6 +644,7 @@ def main():
                 args.seed,
                 store,
                 expected_facts,
+                args.min_samples,
             )
             update_profile(
                 args.output,
