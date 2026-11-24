@@ -68,7 +68,7 @@ def source_connection():
 def fetch_rows(connection, query):
     """Yield query results as dictionaries of strings."""
     statement = connection.createStatement()
-    statement.setFetchSize(5000)
+    statement.setFetchSize(int(os.environ.get('ETL_FETCHSIZE', '5000')))
     results = statement.executeQuery(query)
 
     try:

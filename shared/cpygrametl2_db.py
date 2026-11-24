@@ -32,8 +32,12 @@ from helpers.helpers import (
     extractdomaininfo,
     extractserverinfo,
 )
+from helpers.params import get_int
 
-BATCHSIZE = 500
+BATCHSIZE = get_int("ETL_BATCHSIZE", 500)
+QUEUESIZE = get_int("ETL_QUEUESIZE", 10)
+BULKSIZE = get_int("ETL_BULKSIZE", 250000)
+FETCHSIZE = get_int("ETL_FETCHSIZE", 5000)
 
 
 def create_etl():
@@ -121,7 +125,7 @@ def create_etl():
                     targetconnection=shrdconn.copy(),
                 ),
                 batchsize=BATCHSIZE,
-                queuesize=10,
+                queuesize=QUEUESIZE,
             )
 
     pagedim = DimensionPartitioner([pd for pd in getpagediminstances()])
@@ -151,12 +155,12 @@ def create_etl():
             name="testresults",
             keyrefs=["pageid", "testid", "dateid"],
             measures=["errors"],
-            bulksize=250000,
+            bulksize=BULKSIZE,
             bulkloader=shrdconn.copy().pgcopybulkloader,
             usefilename=True,
         ),
         batchsize=BATCHSIZE,
-        queuesize=10,
+        queuesize=QUEUESIZE,
         consumes=pagedim.parts,
         returnvalues=False,
     )
@@ -175,7 +179,7 @@ def create_etl():
             ORDER BY localfile
         """,
         cursorarg="downloadlog_cursor",
-        fetchsize=5000,
+        fetchsize=FETCHSIZE,
     )
 
     testresults = SQLSource(
@@ -189,7 +193,7 @@ def create_etl():
             ORDER BY localfile, test
         """,
         cursorarg="testresults_cursor",
-        fetchsize=5000,
+        fetchsize=FETCHSIZE,
     )
 
     joineddata = MergeJoiningSource(downloadlog, "localfile", testresults, "localfile")
@@ -199,7 +203,7 @@ def create_etl():
     )
 
     # ProcessSource will also spawn worker threads.
-    inputdata = ProcessSource(transformeddata, batchsize=BATCHSIZE, queuesize=10)
+    inputdata = ProcessSource(transformeddata, batchsize=BATCHSIZE, queuesize=QUEUESIZE)
 
     return (
         shrdconn,

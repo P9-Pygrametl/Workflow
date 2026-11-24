@@ -23,6 +23,8 @@ from pygrametl.tables import CachedDimension, SlowlyChangingDimension, BulkFactT
 
 loadenv()
 
+BULKSIZE = int(os.environ.get("ETL_BULKSIZE", "250000"))
+
 
 # Connection to target DW:
 dwhost = os.environ.get("DW_HOST", "localhost")
@@ -100,7 +102,7 @@ facttbl = BulkFactTable(
     keyrefs=["pageid", "testid", "dateid"],
     measures=["errors"],
     bulkloader=pgcopybulkloader,
-    bulksize=250000,
+    bulksize=BULKSIZE,
 )
 
 

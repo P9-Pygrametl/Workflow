@@ -24,10 +24,14 @@ from pygrametl.tables import (
 )
 
 from helpers.helpers import datehandling, extractdomaininfo, extractserverinfo
+from helpers.params import get_int
 
 load_dotenv()
 
-BATCHSIZE = 500
+BATCHSIZE = get_int("ETL_BATCHSIZE", 500)
+QUEUESIZE = get_int("ETL_QUEUESIZE", 10)
+BULKSIZE = get_int("ETL_BULKSIZE", 250000)
+FETCHSIZE = get_int("ETL_FETCHSIZE", 5000)
 
 
 def get_prefetch():
@@ -97,7 +101,7 @@ def create_etl():
                     targetconnection=shrdconn.copy(),
                 ),
                 batchsize=BATCHSIZE,
-                queuesize=10,
+                queuesize=QUEUESIZE,
             )
 
     pagedim = DimensionPartitioner(list(page_dimensions()))
@@ -127,12 +131,12 @@ def create_etl():
             name="testresults",
             keyrefs=["pageid", "testid", "dateid"],
             measures=["errors"],
-            bulksize=250000,
+            bulksize=BULKSIZE,
             bulkloader=shrdconn.copy().pgcopybulkloader,
             usefilename=True,
         ),
         batchsize=BATCHSIZE,
-        queuesize=10,
+        queuesize=QUEUESIZE,
         consumes=pagedim.parts,
         returnvalues=False,
     )
@@ -165,7 +169,7 @@ async def run_etl(shrdconn, source_connection_args, pagedim, datedim, testdim, f
                 ORDER BY localfile
             """,
             cursorarg="downloadlog_cursor",
-            fetchsize=5000,
+            fetchsize=FETCHSIZE,
             prefetch=prefetch,
         )
 
@@ -177,7 +181,7 @@ async def run_etl(shrdconn, source_connection_args, pagedim, datedim, testdim, f
                 ORDER BY localfile, test
             """,
             cursorarg="testresults_cursor",
-            fetchsize=5000,
+            fetchsize=FETCHSIZE,
             prefetch=prefetch,
         )
 
