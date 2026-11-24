@@ -16,7 +16,6 @@ import os
 import random
 import shutil
 import sqlite3
-import statistics
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -99,7 +98,9 @@ class ScalingStore:
     def __init__(self, path):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(path)
-        columns = ", ".join(f"{name} {sql_type}" for name, sql_type in SQL_TYPES.items())
+        columns = ", ".join(
+            f"{name} {sql_type}" for name, sql_type in SQL_TYPES.items()
+        )
         self.connection.execute(
             f"CREATE TABLE IF NOT EXISTS scaling_runs ({columns}) STRICT"
         )
@@ -133,19 +134,8 @@ class ScalingStore:
         )
         self.connection.commit()
 
-    def rows(self):
-        return self.connection.execute(
-            """
-            SELECT implementation, runtime, cores, wall_seconds, valid
-            FROM scaling_runs
-            ORDER BY implementation, runtime, cores, run
-            """
-        ).fetchall()
-
     def export_csv(self, path):
-        cursor = self.connection.execute(
-            "SELECT * FROM scaling_runs ORDER BY id"
-        )
+        cursor = self.connection.execute("SELECT * FROM scaling_runs ORDER BY id")
         columns = [column[0] for column in cursor.description]
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", newline="", encoding="utf-8") as output:
@@ -181,6 +171,7 @@ def reset_warehouse():
 
 def execute(mode, cpu_list, pages, run, expected_facts, oracle_signature):
     """Run one affinity-constrained trial and return its measurement."""
+
     reset_warehouse()
 
     environment = build_environment(os.environ, mode.env)
@@ -222,30 +213,15 @@ def execute(mode, cpu_list, pages, run, expected_facts, oracle_signature):
 
 
 def print_outcome(result, cores):
-    if result.returncode == 0 and result.valid:
-        wall = (
-            f"{result.wall_seconds:.2f}s"
-            if result.wall_seconds is not None
-            else "N/A"
-        )
-        cpu = (
-            f"{result.cpu_seconds:.2f}s"
-            if result.cpu_seconds is not None
-            else "N/A"
-        )
-        pss = (
-            f"{result.peak_pss_mb:.1f}MiB"
-            if result.peak_pss_mb is not None
-            else "N/A"
-        )
-        print(
-            f"  cores={cores} wall={wall} cpu={cpu} pss={pss} "
-            f"facts={result.fact_rows}"
-        )
+    wall = (
+        f"{result.wall_seconds:.2f}s"
+        if result.wall_seconds is not None
+        else "N/A"
+    )
+    if result.valid and result.returncode == 0:
+        print(f"  cores={cores} wall={wall} facts={result.fact_rows}")
     else:
-        print(f"  cores={cores} FAILED (return code {result.returncode})")
-        if result.error:
-            print(f"  {result.error.splitlines()[-1]}")
+        print(f"  cores={cores} FAILED wall={wall}")
     if result.validation_error:
         print(f"  INVALID: {result.validation_error}")
 
@@ -259,9 +235,7 @@ def select_modes(names):
         matches = [
             mode
             for mode in MODES
-            if mode.key == name
-            or mode.label == name
-            or mode.implementation == name
+            if mode.key == name or mode.label == name or mode.implementation == name
         ]
         if not matches:
             raise ValueError(f"No modes matched {name!r}")
@@ -269,44 +243,6 @@ def select_modes(names):
             if mode not in selected:
                 selected.append(mode)
     return selected
-
-
-def summarize(store):
-    rows = store.rows()
-    groups = {}
-    for implementation, runtime, cores, wall, valid in rows:
-        if valid and wall is not None:
-            groups.setdefault((implementation, runtime, cores), []).append(wall)
-
-    medians = {
-        key: statistics.median(values)
-        for key, values in groups.items()
-        if values
-    }
-
-    print("\nMedians by mode and available P-cores")
-    print("-" * 78)
-    print(f"{'mode':42} {'cores':>5} {'n':>3} {'median':>9} {'speedup':>8}")
-    print("-" * 78)
-
-    for implementation, runtime in sorted(set((key[0], key[1]) for key in medians)):
-        base = medians.get((implementation, runtime, 1))
-        core_counts = sorted(
-            {
-                key[2]
-                for key in medians
-                if key[0] == implementation and key[1] == runtime
-            }
-        )
-        for cores in core_counts:
-            key = (implementation, runtime, cores)
-            median = medians[key]
-            speedup = f"{base / median:.2f}x" if base else "-"
-            label = f"{implementation} ({runtime})"
-            print(
-                f"{label:42} {cores:5d} {len(groups[key]):3d} "
-                f"{median:8.2f}s {speedup:>8}"
-            )
 
 
 def parse_args():
@@ -339,11 +275,6 @@ def parse_args():
         help=f"Tuned parameter profile (default: {TUNED_FILE}).",
     )
     parser.add_argument(
-        "--defaults",
-        action="store_true",
-        help="Ignore the tuned profile.",
-    )
-    parser.add_argument(
         "--db",
         type=Path,
         default=SCALING_DB,
@@ -357,19 +288,9 @@ def parse_args():
     )
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument(
-        "--skip-generate",
-        action="store_true",
-        help="Use the source data already in the database.",
-    )
-    parser.add_argument(
         "--fresh",
         action="store_true",
         help="Delete the scaling database before starting.",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print the plan without running anything.",
     )
     args = parser.parse_args()
 
@@ -403,32 +324,18 @@ def main():
         print("taskset is required but was not found")
         return 1
 
-    profile = {} if args.defaults else load_profile(args.tuned)
-    profile_label = "defaults" if args.defaults or not profile else args.tuned.name
+    profile = load_profile(args.tuned)
 
     print(f"P-cores: {p_cores}")
     print(f"Core counts: {args.cores}")
     print(f"Modes: {len(modes)}, repeats: {args.repeats}, pages: {args.pages}")
     print(f"Tuned profile: {'none' if not profile else args.tuned.resolve()}")
 
-    if args.dry_run:
-        total = len(modes) * len(args.cores) * args.repeats
-        print(f"Total measured runs: {total} plus one oracle run")
-        for mode in modes:
-            cpu_lists = [
-                ",".join(str(cpu) for cpu in p_cores[:cores])
-                for cores in args.cores
-            ]
-            print(f"  {mode.key}: {', '.join(cpu_lists)}")
-        return 0
-
     if args.fresh and args.db.exists():
         print(f"Removing {args.db}")
         args.db.unlink()
 
-    if not args.skip_generate:
-        print(f"Generating source data for pages={args.pages}...")
-        generate(args.pages)
+    generate(args.pages)
 
     expected_facts = expected_fact_rows()
     print(f"Expected fact rows: {expected_facts}")
@@ -493,11 +400,10 @@ def main():
             print_outcome(result, cores)
 
         store.export_csv(args.output)
-        summarize(store)
 
     print(f"\nTrial log: {args.db.resolve()}")
     print(f"CSV export: {args.output.resolve()}")
-    print(f"Profile: {profile_label}")
+    print(f"Profile: {'none' if not profile else args.tuned.name}")
     return 0
 
 
