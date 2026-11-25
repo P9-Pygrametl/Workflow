@@ -1,0 +1,6 @@
+services:
+  source-db:
+    cpuset: "8-19"
+
+  dw-db:
+    cpuset: "8-19"
